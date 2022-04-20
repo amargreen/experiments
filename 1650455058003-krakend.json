@@ -1,0 +1,75 @@
+﻿{
+  "$schema": "https://www.krakend.io/schema/v3.json",
+  "version": 3,
+  "extra_config": {
+    "telemetry/logging": {
+      "level": "INFO",
+      "prefix": "[KRAKEND]",
+      "syslog": true,
+      "stdout": true,
+      "format": "logstash"
+    },
+    "telemetry/logstash": {
+      "enabled": true
+    },
+    "telemetry/metrics": {
+      "collection_time": "60s",
+      "proxy_disabled": false,
+      "router_disabled": false,
+      "backend_disabled": false,
+      "endpoint_disabled": false,
+      "listen_address": ":8090"
+    },
+	"telemetry/opencensus": {
+        "exporters": {
+          "prometheus": {
+              "port": 9091,
+              "namespace": "krakend",
+              "tag_host": false,
+              "tag_path": true,
+              "tag_method": true,
+              "tag_statuscode": false
+          }
+      }
+    }
+  },
+  "timeout": "3000ms",
+  "cache_ttl": "300s",
+  "output_encoding": "json",
+  "name": "Pet Store",
+  "endpoints": [
+    {
+      "endpoint": "/v1/pets",
+      "method": "GET",
+      "output_encoding": "json",
+      "extra_config": {
+        "proxy": {
+          "static": {
+            "data": {
+              "id": 0,
+              "category": {
+                "id": 0,
+                "name": "string"
+              },
+              "name": "doggie",
+              "photoUrls": [
+                "string"
+              ],
+              "tags": [
+                {
+                  "id": 0,
+                  "name": "string"
+                }
+              ],
+              "status": "available"
+            },
+            "strategy": "incomplete"
+          }
+        }
+      },
+      "input_query_strings": [
+        "id"
+      ]
+    }
+  ]
+}
