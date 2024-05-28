@@ -207,7 +207,78 @@ public Step myStep(JdbcCursorItemReader<MyModel> reader, MyModelProcessor proces
 }
 
 This will write each error record to a file named error.txt in the current directory. You'll need to replace this with your actual file name. The MySkipListener writes to the error file when an error occurs during writing or processing. If you also want to handle errors during reading, you can implement the onSkipInRead method.
+------------------------------------------------------------------------------
+To write error records to a separate file, you can use a FlatFileItemWriter in a SkipListener. The SkipListener will be called when an error occurs during reading, processing, or writing.
 
+Here's how you can do it:
+
+Define a FlatFileItemWriter to write to an error file.
+Define a SkipListener that writes error records to the error file.
+Update the Job to use the SkipListener.
+Here's the code:
+// Step 1: Define a FlatFileItemWriter
+@Bean
+public FlatFileItemWriter<MyModel> errorFileWriter() {
+    FlatFileItemWriter<MyModel> writer = new FlatFileItemWriter<>();
+    writer.setResource(new FileSystemResource("error.txt"));
+    writer.setLineAggregator(new DelimitedLineAggregator<MyModel>() {{
+        setDelimiter(",");
+        setFieldExtractor(new BeanWrapperFieldExtractor<MyModel>() {{
+            setNames(new String[] {"field1", "field2"});
+        }});
+    }});
+    return writer;
+}
+
+// Step 2: Define a SkipListener
+public class MySkipListener implements SkipListener<MyModel, MyModel> {
+    private FlatFileItemWriter<MyModel> errorFileWriter;
+
+    public MySkipListener(FlatFileItemWriter<MyModel> errorFileWriter) {
+        this.errorFileWriter = errorFileWriter;
+    }
+
+    @Override
+    public void onSkipInRead(Throwable t) {
+    }
+
+    @Override
+    public void onSkipInWrite(MyModel item, Throwable t) {
+        writeError(item);
+    }
+
+    @Override
+    public void onSkipInProcess(MyModel item, Throwable t) {
+        writeError(item);
+    }
+
+    private void writeError(MyModel item) {
+        try {
+            errorFileWriter.open(new ExecutionContext());
+            errorFileWriter.write(Collections.singletonList(item));
+            errorFileWriter.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+// Step 3: Update the Job to use the SkipListener
+@Bean
+public Step myStep(JdbcCursorItemReader<MyModel> reader, MyModelProcessor processor, ConditionalItemWriter writer, FlatFileItemWriter<MyModel> errorFileWriter) {
+    return stepBuilderFactory.get("myStep")
+            .<MyModel, MyModel> chunk(10)
+            .reader(reader)
+            .processor(processor)
+            .writer(writer)
+            .faultTolerant()
+            .skip(Exception.class)
+            .skipLimit(Integer.MAX_VALUE)
+            .listener(new MySkipListener(errorFileWriter))
+            .build();
+}
+
+This will write each error record to a file named error.txt in the current directory. You'll need to replace this with your actual file name. The MySkipListener writes to the error file when an error occurs during writing or processing. If you also want to handle errors during reading, you can implement the onSkipInRead method.
 ----------------------------------------------------
 
 Here's how you can implement the same functionality in a legacy Spring application using XML configuration:
