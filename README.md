@@ -354,3 +354,175 @@ public class MySkipListener implements SkipListener<MyModel, MyModel> {
 }
 
 This will write each error record to a file named error.txt in the current directory. You'll need to replace this with your actual file name. The MySkipListener writes to the error file when an error occurs during writing or processing. If you also want to handle errors during reading, you can implement the onSkipInRead method.
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+This BatchJobTest class uses Mockito to create mock implementations of the ItemReader, ItemProcessor, and ItemWriter. The @Mock annotation creates the mock objects, and the @InjectMocks annotation injects the mock objects into the BatchJobRunner.
+
+The testBatchJob method sets up the mock objects to return specific values when their methods are called, runs the batch job, and then verifies that the methods were called the expected number of times with the expected arguments.
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.item.ItemReader;
+import org.springframework.batch.item.ItemWriter;
+
+import static org.mockito.Mockito.*;
+
+public class BatchJobTest {
+
+    @Mock
+    private ItemReader<Customer> reader;
+
+    @Mock
+    private ItemProcessor<Customer, Customer> processor;
+
+    @Mock
+    private ItemWriter<Customer> writer;
+
+    @InjectMocks
+    private BatchJobRunner batchJobRunner;
+
+    @BeforeEach
+    public void setUp() {
+        MockitoAnnotations.openMocks(this);
+    }
+
+    @Test
+    public void testBatchJob() throws Exception {
+        Customer customer = new Customer();
+        customer.setId(1L);
+        customer.setName("Test Customer");
+        customer.setEmail("test@example.com");
+        customer.setSubscriptionEndDate(new Date());
+        customer.setAccessEnabled(true);
+
+        when(reader.read()).thenReturn(customer, (Customer) null);
+        when(processor.process(any(Customer.class))).thenReturn(customer);
+        doNothing().when(writer).write(anyList());
+
+        batchJobRunner.run();
+
+        verify(reader, times(2)).read();
+        verify(processor, times(1)).process(any(Customer.class));
+        verify(writer, times(1)).write(anyList());
+    }
+}
+
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.item.ItemReader;
+import org.springframework.batch.item.ItemWriter;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+
+import static org.mockito.Mockito.*;
+
+@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration(locations = {"classpath:spring-batch-config.xml"})
+public class BatchJobTest {
+
+    @Mock
+    private ItemReader<Customer> reader;
+
+    @Mock
+    private ItemProcessor<Customer, Customer> processor;
+
+    @Mock
+    private ItemWriter<Customer> writer;
+
+    @InjectMocks
+    private BatchJobRunner batchJobRunner;
+
+    @Before
+    public void setUp() {
+        MockitoAnnotations.initMocks(this);
+    }
+
+    @Test
+    public void testBatchJob() throws Exception {
+        Customer customer = new Customer();
+        customer.setId(1L);
+        customer.setName("Test Customer");
+        customer.setEmail("test@example.com");
+        customer.setSubscriptionEndDate(new Date());
+        customer.setAccessEnabled(true);
+
+        when(reader.read()).thenReturn(customer, (Customer) null);
+        when(processor.process(any(Customer.class))).thenReturn(customer);
+        doNothing().when(writer).write(anyList());
+
+        batchJobRunner.run();
+
+        verify(reader, times(2)).read();
+        verify(processor, times(1)).process(any(Customer.class));
+        verify(writer, times(1)).write(anyList());
+    }
+}
+
+If you're using a legacy Spring version with XML context, you can use the SpringJUnit4ClassRunner and ContextConfiguration annotations to load the Spring context. Here's how you can modify the previous test to work with XML context:
+
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.item.ItemReader;
+import org.springframework.batch.item.ItemWriter;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+
+import static org.mockito.Mockito.*;
+
+@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration(locations = {"classpath:spring-batch-config.xml"})
+public class BatchJobTest {
+
+    @Mock
+    private ItemReader<Customer> reader;
+
+    @Mock
+    private ItemProcessor<Customer, Customer> processor;
+
+    @Mock
+    private ItemWriter<Customer> writer;
+
+    @InjectMocks
+    private BatchJobRunner batchJobRunner;
+
+    @Before
+    public void setUp() {
+        MockitoAnnotations.initMocks(this);
+    }
+
+    @Test
+    public void testBatchJob() throws Exception {
+        Customer customer = new Customer();
+        customer.setId(1L);
+        customer.setName("Test Customer");
+        customer.setEmail("test@example.com");
+        customer.setSubscriptionEndDate(new Date());
+        customer.setAccessEnabled(true);
+
+        when(reader.read()).thenReturn(customer, (Customer) null);
+        when(processor.process(any(Customer.class))).thenReturn(customer);
+        doNothing().when(writer).write(anyList());
+
+        batchJobRunner.run();
+
+        verify(reader, times(2)).read();
+        verify(processor, times(1)).process(any(Customer.class));
+        verify(writer, times(1)).write(anyList());
+    }
+}
+
+In this example, SpringJUnit4ClassRunner is used to provide Spring testing functionality to standard JUnit tests. The @ContextConfiguration annotation is used to specify the XML configuration file that defines the Spring context. The MockitoAnnotations.initMocks(this) method is used to initialize the mock and spy objects.
