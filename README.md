@@ -526,3 +526,6 @@ public class BatchJobTest {
 }
 
 In this example, SpringJUnit4ClassRunner is used to provide Spring testing functionality to standard JUnit tests. The @ContextConfiguration annotation is used to specify the XML configuration file that defines the Spring context. The MockitoAnnotations.initMocks(this) method is used to initialize the mock and spy objects.
+
+@Query(value = "{ $or: [ { 'Date1': { $lt: ?0 }, 'Date2': { $gt: ?0 } }, { 'SubInquiries': { $elemMatch: { $or: [ { 'Date3': null }, { 'Date3': { $lt: ?0 } } ], $or: [ { 'Date4': null }, { 'Date4': { $gt: ?0 } } ] } } } ] }")
+
