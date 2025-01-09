@@ -529,8 +529,8 @@ In this example, SpringJUnit4ClassRunner is used to provide Spring testing funct
 
 @Query(value = "{ $or: [ { 'Date1': { $lt: ?0 }, 'Date2': { $gt: ?0 } }, { 'SubInquiries': { $elemMatch: { $or: [ { 'Date3': null }, { 'Date3': { $lt: ?0 } } ], $or: [ { 'Date4': null }, { 'Date4': { $gt: ?0 } } ] } } } ] }")
 
-@Query(value = "{ 'Date1': { $lt: ?0 }, 'Date2': { $gt: ?0 }, 'SubInquiries': { $elemMatch: { $or: [ { 'Date3': null }, { 'Date3': { $lt: ?0 } } ], $or: [ { 'Date4': null }, { 'Date4': { $gt: ?0 } } ] } } }", 
+@Query(value = "{ $and: [ { 'Date1': { $lt: ?0 } }, { 'Date2': { $gt: ?0 } }, { $or: [ { 'SubInquiries': { $exists: false } }, { 'SubInquiries': { $size: 0 } }, { 'SubInquiries': { $elemMatch: { $or: [ { 'Date3': null }, { 'Date3': { $lt: ?0 } } ], $or: [ { 'Date4': null }, { 'Date4': { $gt: ?0 } } ] } } } ] } ] }", 
        fields = "{ 'name': 1, 'Date1': 1, 'Date2': 1, 'SubInquiries.$': 1 }")
-List<InquiryType> findInquiryTypeWithMatchingSubInquiries(Date passedDate);
+List<InquiryType> findMatchingInquiriesWithSubInquiries(Date passedDate);
 
 
