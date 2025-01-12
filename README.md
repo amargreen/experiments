@@ -533,4 +533,9 @@ In this example, SpringJUnit4ClassRunner is used to provide Spring testing funct
        fields = "{ 'name': 1, 'Date1': 1, 'Date2': 1, 'SubInquiries.$': 1 }")
 List<InquiryType> findMatchingInquiriesWithSubInquiries(Date passedDate);
 
+@Aggregation(pipeline = {
+        "{ $match: { effectiveDate: { $lt: ?0 }, termiDate: { $gt: ?0 } } }",
+        "{ $addFields: { subInquiries: { $filter: { input: '$subInquiries', as: 'sub', cond: { $and: [ { $lt: ['$$sub.effectiveDate', ?0] }, { $gt: ['$$sub.termiDate', ?0] } ] } } } } }"
+    })
+
 
