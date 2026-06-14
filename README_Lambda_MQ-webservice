@@ -1,0 +1,179 @@
+Engineering Architecture Guide: Offloading Lambda Outbound Security (mTLS & TLS) to Istio Egress GatewayThis document outlines how to design an architecture where an AWS Lambda function relies entirely on an EKS-based Istio Egress Gateway to connect to on-premises systems.By offloading the cryptographic handshakes and certificate management to Istio, the Lambda function requires no native IBM MQ client libraries, no crypto configurations, and no client certificates embedded in its deployment package.1. Architectural Overview                        ┌─────────────────── AWS VPC ───────────────────┐
+                        │                                               │
+                        │  ┌────────────────┐                           │
+                        │  │ AWS Lambda     │                           │
+                        │  │ (Within VPC)   │                           │
+                        │  └───────┬────────┘                           │
+                        │          │ (Plain TCP/HTTP via Subnet Route)  │
+                        │          ▼                                    │
+                        │  ┌─────────────────────────────────────────┐  │
+                        │  │ Amazon EKS Cluster (Istio Service Mesh) │  │
+                        │  │                                         │  │
+                        │  │   ┌──────────────────────────────┐      │  │
+                        │  │   │ Istio Egress Gateway Pod     │      │  │
+                        │  │   │                              │      │  │
+                        │  │   │ ──► Mounts K8s Secrets       │      │  │
+                        │  │   │ ──► Performs mTLS / TLS      │      │  │
+                        │  │   └──────────────┬───────────────┘      │  │
+                        │  └──────────────────┼──────────────────────┘  │
+                        │                     │                         │
+                        └─────────────────────┼─────────────────────────┘
+                                              │ (Secure mTLS / TLS Tunnel)
+                                              ▼
+                                 [ AWS Direct Connect / VPN ]
+                                              │
+                        ┌─────────────────────▼─────────────────────────┐
+                        │              On-Premises Data Center          │
+                        │                                               │
+                        │  ┌──────────────────┐   ┌──────────────────┐  │
+                        │  │ IBM MQ Broker    │   │ Web Service      │  │
+                        │  │ (Requires mTLS)  │   │ (Requires TLS)   │  │
+                        │  └──────────────────┘   └──────────────────┘  │
+                        └───────────────────────────────────────────────┘
+Core FlowLambda Ingress: The function relies on AWS Lambda VPC Integration to route out to local private subnets.Local Delivery: The Lambda function fires plain TCP/HTTP requests directly to a dedicated internal Network Load Balancer (NLB) backing the Istio Egress Gateway.Security Origination: Istio intercepts the request using virtual routing constructs (ServiceEntry, Gateway, DestinationRule). It wraps the payload in the required cryptographic tier and tunnels it over the hybrid network.2. Setting Up Kubernetes Secrets & Gateway MountsThe Istio Egress Gateway must be capable of reading your enterprise client certificates.Step 1: Create the SecretExecute this in your cluster to securely provision your private key, public certificate, and the trusted root authority that signed the IBM MQ server certificate.bashkubectl create secret generic ibmmq-client-certs -n istio-system \
+  --from-file=tls.key=./client_key.pem \
+  --from-file=tls.crt=./client_cert.pem \
+  --from-file=ca.crt=./onprem_mq_ca.pem
+Use code with caution.Step 2: Patch the Istio Egress Gateway DeploymentEnsure the Envoy proxy container can access these files by adding a volume mount to your existing Egress Gateway deployment manifest.yamlspec:
+  template:
+    spec:
+      containers:
+      - name: istio-proxy
+        volumeMounts:
+        - name: ibmmq-certs-volume
+          mountPath: /etc/istio/ibmmq-certs
+          readOnly: true
+      volumes:
+      - name: ibmmq-certs-volume
+        secret:
+          secretName: ibmmq-client-certs
+Use code with caution.3. IBM MQ Connection Integration (mTLS)IBM MQ uses a proprietary TCP connection layer. Istio handles this by creating a Layer 4 SNI-transparent routing proxy wrapper.Traffic Definitions & PoliciesyamlapiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: onprem-ibmmq-se
+  namespace: istio-system
+spec:
+  hosts:
+  - ibm-mq.onprem.mesh
+  addresses:
+  - 10.100.5.20 # Real target internal on-prem IP
+  ports:
+  - number: 1414
+    name: tcp-ibmmq
+    protocol: TCP
+  resolution: STATIC
+  location: MESH_EXTERNAL
+  endpoints:
+  - address: 10.100.5.20
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: ibmmq-egress-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+  - port:
+      number: 1414
+      name: tcp-ibmmq
+      protocol: TCP
+    hosts:
+    - ibm-mq.onprem.mesh
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: onprem-ibmmq-dr
+  namespace: istio-system
+spec:
+  host: ibm-mq.onprem.mesh
+  trafficPolicy:
+    tls:
+      mode: MUTUAL # Activates Mutual TLS
+      clientCertificate: /etc/istio/ibmmq-certs/tls.crt
+      privateKey: /etc/istio/ibmmq-certs/tls.key
+      caCertificates: /etc/istio/ibmmq-certs/ca.crt
+Use code with caution.4. Web Service Connection Integration (TLS Origination)For standard internal web services, Istio performs TLS Origination. This translates an incoming plaintext standard HTTP request into encrypted HTTPS outbound.Traffic Definitions & PoliciesyamlapiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: onprem-webservice-se
+  namespace: istio-system
+spec:
+  hosts:
+  - webservice.onprem.mesh
+  ports:
+  - number: 80
+    name: http
+    protocol: HTTP
+  resolution: STATIC
+  location: MESH_EXTERNAL
+  endpoints:
+  - address: 10.100.5.50 # On-prem web server private IP
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: onprem-webservice-dr
+  namespace: istio-system
+spec:
+  host: webservice.onprem.mesh
+  trafficPolicy:
+    portLevelSettings:
+    - port:
+        number: 80
+      tls:
+        mode: SIMPLE # Upgrades plain text HTTP port 80 into outbound TLS (HTTPS)
+Use code with caution.5. Lambda Code Realizations (Pure Business Logic)Because networking layers absorb the structural load, the Lambda runtime code drops all infrastructure logic.Python Example: Posting directly to IBM MQ via Istio Proxypythonimport socket
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def lambda_handler(event, context):
+    # Pure Business Logic: Map or format your domain model data payload
+    raw_mq_payload = b"RFH2...Structured_IBM_MQ_Bytes_And_Data..."
+    
+    # Establish standard socket straight to the Istio mesh endpoint
+    # Istio intercepts this, reads the host headers, wraps with mTLS, and tunnels out
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5.0)
+        s.connect(("ibm-mq.onprem.mesh", 1414)) 
+        
+        s.sendall(raw_mq_payload)
+        logger.info("Raw byte stream emitted safely to mesh.")
+    except Exception as e:
+        logger.error(f"Socket transport failed: {str(e)}")
+        raise e
+    finally:
+        s.close()
+        
+    return {"statusCode": 200, "body": "Payload processed successfully."}
+Use code with caution.Python Example: Invoking Web Service via Istio Proxypythonimport urllib.request
+import json
+
+def lambda_handler(event, context):
+    # Pure Business Logic: Construct payload
+    order_data = json.dumps({"order_id": event.get("id", 0)}).encode("utf-8")
+    
+    # Notice the plain HTTP structure. No internal corporate certificates are loaded here.
+    # Istio automatically intercepts this and originates standard TLS (HTTPS) to the target.
+    target_url = "http://onprem.mesh"
+    
+    req = urllib.request.Request(
+        target_url, 
+        data=order_data, 
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    
+    with urllib.request.urlopen(req, timeout=5.0) as response:
+        server_reply = response.read().decode("utf-8")
+        
+    return {
+        "statusCode": 200, 
+        "body": f"Webservice handled request. Response: {server_reply}"
+    }
+Use code with caution.6. Operational Benefits & Lifecycle ManagementCertificate Rotation Independence: When corporate client certificates expire, DevOps teams update the cluster's native Kubernetes Secret. The Egress Gateway reloads the mounted volumes on the fly. No Lambda code is redeployed, and no functions undergo restart cycles.Aggregated Observability: Connection errors, handshake timeouts, and bandwidth metrics are captured directly within Istio's Prometheus metrics mesh.Minimized Cold Start Footprint: Deleting dependencies such as native C libraries or heavy Python frameworks shrinks deployment ZIP files, dropping cold initialization overhead significantly.If you want to move forward with implementing this, let me know if you need help with Route 53 Private Hosted Zone delegation to route your Lambda DNS queries to the Istio mesh, or if you need assistance configuring the AWS Network Load Balancer (NLB) that sits in front of the Egress Gateway.
