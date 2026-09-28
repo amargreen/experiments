@@ -1,541 +1,366 @@
-here's a step-by-step plan and the code for a basic Spring Batch application that reads from a database, processes the data, and writes to a file.
-  Create a new Spring Boot project and add the necessary dependencies.
-  Define a model class that represents the database table.
-  Define a RowMapper to map the database rows to the model class.
-  Define a Processor to process the data.
-  Define a Writer to write the processed data to a file.
-  Define a Job that uses the reader, processor, and writer.
-  Configure a DataSource to connect to the database.
-// Step 1: Add Spring Boot and Spring Batch dependencies in your build.gradle file
-dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
-    implementation 'org.springframework.boot:spring-boot-starter-batch'
-    runtimeOnly 'com.h2database:h2'
-    testImplementation 'org.springframework.boot:spring-boot-starter-test'
-}
-
-// Step 2: Define a model class
-public class MyModel {
-    private String field1;
-    private String field2;
-    // getters and setters
-}
-
-// Step 3: Define a RowMapper
-public class MyModelRowMapper implements RowMapper<MyModel> {
-    @Override
-    public MyModel mapRow(ResultSet rs, int rowNum) throws SQLException {
-        MyModel model = new MyModel();
-        model.setField1(rs.getString("field1"));
-        model.setField2(rs.getString("field2"));
-        return model;
-    }
-}
-
-// Step 4: Define a Processor
-public class MyModelProcessor implements ItemProcessor<MyModel, MyModel> {
-    @Override
-    public MyModel process(MyModel item) throws Exception {
-        // process item
-        return item;
-    }
-}
-
-// Step 5: Define a Writer
-public class MyModelWriter implements ItemWriter<MyModel> {
-    @Override
-    public void write(List<? extends MyModel> items) throws Exception {
-        // write items to file
-    }
-}
-
-// Step 6: Define a Job
-@Configuration
-@EnableBatchProcessing
-public class BatchConfiguration {
-    @Autowired
-    public JobBuilderFactory jobBuilderFactory;
-    @Autowired
-    public StepBuilderFactory stepBuilderFactory;
-
-    @Bean
-    public JdbcCursorItemReader<MyModel> reader(DataSource dataSource) {
-        return new JdbcCursorItemReaderBuilder<MyModel>()
-                .dataSource(dataSource)
-                .name("myModelReader")
-                .sql("SELECT field1, field2 FROM my_table")
-                .rowMapper(new MyModelRowMapper())
-                .build();
-    }
-
-    @Bean
-    public MyModelProcessor processor() {
-        return new MyModelProcessor();
-    }
-
-    @Bean
-    public MyModelWriter writer() {
-        return new MyModelWriter();
-    }
-
-    @Bean
-    public Step myStep(JdbcCursorItemReader<MyModel> reader, MyModelProcessor processor, MyModelWriter writer) {
-        return stepBuilderFactory.get("myStep")
-                .<MyModel, MyModel> chunk(10)
-                .reader(reader)
-                .processor(processor)
-                .writer(writer)
-                .build();
-    }
-
-    @Bean
-    public Job myJob(Step myStep) {
-        return jobBuilderFactory.get("myJob")
-                .incrementer(new RunIdIncrementer())
-                .flow(myStep)
-                .end()
-                .build();
-    }
-}
-
-// Step 7: Configure a DataSource in your application.properties file
-spring.datasource.url=jdbc:h2:mem:testdb
-spring.datasource.driverClassName=org.h2.Driver
-spring.datasource.username=sa
-spring.datasource.password=password
-spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
-This is a basic example and you'll need to modify it to suit your specific needs. For example, you'll need to replace MyModel, my_table, and the SQL query with your actual model class, table name, and query. You'll also need to implement the process method in MyModelProcessor and the write method in MyModelWriter to do the actual processing and writing.
--------------------------------------------------------------------------------------------------
-To write an entry to a file and a database after processing a record, you can use Spring Batch's FlatFileItemWriter and JdbcBatchItemWriter respectively.
-
-Here's how you can do it:
-
-Define a FlatFileItemWriter to write to a file.
-Define a JdbcBatchItemWriter to write to a database.
-Define a CompositeItemWriter to use both writers.
-Update the Job to use the CompositeItemWriter.
-Here's the code:
-// Step 1: Define a FlatFileItemWriter
-@Bean
-public FlatFileItemWriter<MyModel> fileWriter() {
-    FlatFileItemWriter<MyModel> writer = new FlatFileItemWriter<>();
-    writer.setResource(new FileSystemResource("output.txt"));
-    writer.setLineAggregator(new DelimitedLineAggregator<MyModel>() {{
-        setDelimiter(",");
-        setFieldExtractor(new BeanWrapperFieldExtractor<MyModel>() {{
-            setNames(new String[] {"field1", "field2"});
-        }});
-    }});
-    return writer;
-}
-
-// Step 2: Define a JdbcBatchItemWriter
-@Bean
-public JdbcBatchItemWriter<MyModel> databaseWriter(DataSource dataSource) {
-    JdbcBatchItemWriter<MyModel> writer = new JdbcBatchItemWriter<>();
-    writer.setItemSqlParameterSourceProvider(new BeanPropertyItemSqlParameterSourceProvider<>());
-    writer.setSql("INSERT INTO my_table (field1, field2) VALUES (:field1, :field2)");
-    writer.setDataSource(dataSource);
-    return writer;
-}
-
-// Step 3: Define a CompositeItemWriter
-@Bean
-public CompositeItemWriter<MyModel> compositeWriter(FlatFileItemWriter<MyModel> fileWriter, JdbcBatchItemWriter<MyModel> databaseWriter) {
-    CompositeItemWriter<MyModel> writer = new CompositeItemWriter<>();
-    writer.setDelegates(Arrays.asList(fileWriter, databaseWriter));
-    return writer;
-}
-
-// Step 4: Update the Job to use the CompositeItemWriter
-@Bean
-public Step myStep(JdbcCursorItemReader<MyModel> reader, MyModelProcessor processor, CompositeItemWriter<MyModel> writer) {
-    return stepBuilderFactory.get("myStep")
-            .<MyModel, MyModel> chunk(10)
-            .reader(reader)
-            .processor(processor)
-            .writer(writer)
-            .build();
-}
-
-This will write each processed record to both a file and a database. The FlatFileItemWriter writes to a file named output.txt in the current directory, and the JdbcBatchItemWriter writes to a table named my_table in the database. You'll need to replace these with your actual file name and table name. The SQL query in the JdbcBatchItemWriter also needs to be replaced with your actual query.
--------------------------------------------------------------------------------------------------------
-To conditionally write to a file or a database, you can create a custom ItemWriter that delegates to either the FlatFileItemWriter or the JdbcBatchItemWriter based on a condition.
-
-Here's how you can do it:
-
-  Define a ConditionalItemWriter that writes to either a file or a database based on a condition.
-  Update the Job to use the ConditionalItemWriter.
-Here's the code:
-// Step 1: Define a ConditionalItemWriter
-public class ConditionalItemWriter implements ItemWriter<MyModel> {
-    private FlatFileItemWriter<MyModel> fileWriter;
-    private JdbcBatchItemWriter<MyModel> databaseWriter;
-
-    public ConditionalItemWriter(FlatFileItemWriter<MyModel> fileWriter, JdbcBatchItemWriter<MyModel> databaseWriter) {
-        this.fileWriter = fileWriter;
-        this.databaseWriter = databaseWriter;
-    }
-
-    @Override
-    public void write(List<? extends MyModel> items) throws Exception {
-        List<MyModel> fileItems = new ArrayList<>();
-        List<MyModel> databaseItems = new ArrayList<>();
-
-        for (MyModel item : items) {
-            if (/* your condition here */) {
-                fileItems.add(item);
-            } else {
-                databaseItems.add(item);
-            }
-        }
-
-        fileWriter.write(fileItems);
-        databaseWriter.write(databaseItems);
-    }
-}
-
-// Step 2: Update the Job to use the ConditionalItemWriter
-@Bean
-public Step myStep(JdbcCursorItemReader<MyModel> reader, MyModelProcessor processor, FlatFileItemWriter<MyModel> fileWriter, JdbcBatchItemWriter<MyModel> databaseWriter) {
-    return stepBuilderFactory.get("myStep")
-            .<MyModel, MyModel> chunk(10)
-            .reader(reader)
-            .processor(processor)
-            .writer(new ConditionalItemWriter(fileWriter, databaseWriter))
-            .build();
-}
-
-This will write each error record to a file named error.txt in the current directory. You'll need to replace this with your actual file name. The MySkipListener writes to the error file when an error occurs during writing or processing. If you also want to handle errors during reading, you can implement the onSkipInRead method.
-------------------------------------------------------------------------------
-To write error records to a separate file, you can use a FlatFileItemWriter in a SkipListener. The SkipListener will be called when an error occurs during reading, processing, or writing.
-
-Here's how you can do it:
-
-Define a FlatFileItemWriter to write to an error file.
-Define a SkipListener that writes error records to the error file.
-Update the Job to use the SkipListener.
-Here's the code:
-// Step 1: Define a FlatFileItemWriter
-@Bean
-public FlatFileItemWriter<MyModel> errorFileWriter() {
-    FlatFileItemWriter<MyModel> writer = new FlatFileItemWriter<>();
-    writer.setResource(new FileSystemResource("error.txt"));
-    writer.setLineAggregator(new DelimitedLineAggregator<MyModel>() {{
-        setDelimiter(",");
-        setFieldExtractor(new BeanWrapperFieldExtractor<MyModel>() {{
-            setNames(new String[] {"field1", "field2"});
-        }});
-    }});
-    return writer;
-}
-
-// Step 2: Define a SkipListener
-public class MySkipListener implements SkipListener<MyModel, MyModel> {
-    private FlatFileItemWriter<MyModel> errorFileWriter;
-
-    public MySkipListener(FlatFileItemWriter<MyModel> errorFileWriter) {
-        this.errorFileWriter = errorFileWriter;
-    }
-
-    @Override
-    public void onSkipInRead(Throwable t) {
-    }
-
-    @Override
-    public void onSkipInWrite(MyModel item, Throwable t) {
-        writeError(item);
-    }
-
-    @Override
-    public void onSkipInProcess(MyModel item, Throwable t) {
-        writeError(item);
-    }
-
-    private void writeError(MyModel item) {
-        try {
-            errorFileWriter.open(new ExecutionContext());
-            errorFileWriter.write(Collections.singletonList(item));
-            errorFileWriter.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-}
-
-// Step 3: Update the Job to use the SkipListener
-@Bean
-public Step myStep(JdbcCursorItemReader<MyModel> reader, MyModelProcessor processor, ConditionalItemWriter writer, FlatFileItemWriter<MyModel> errorFileWriter) {
-    return stepBuilderFactory.get("myStep")
-            .<MyModel, MyModel> chunk(10)
-            .reader(reader)
-            .processor(processor)
-            .writer(writer)
-            .faultTolerant()
-            .skip(Exception.class)
-            .skipLimit(Integer.MAX_VALUE)
-            .listener(new MySkipListener(errorFileWriter))
-            .build();
-}
-
-This will write each error record to a file named error.txt in the current directory. You'll need to replace this with your actual file name. The MySkipListener writes to the error file when an error occurs during writing or processing. If you also want to handle errors during reading, you can implement the onSkipInRead method.
-----------------------------------------------------
-
-Here's how you can implement the same functionality in a legacy Spring application using XML configuration:
-
-<!-- Step 1: Define a FlatFileItemWriter -->
-<bean id="errorFileWriter" class="org.springframework.batch.item.file.FlatFileItemWriter">
-    <property name="resource" value="file:./error.txt" />
-    <property name="lineAggregator">
-        <bean class="org.springframework.batch.item.file.transform.DelimitedLineAggregator">
-            <property name="delimiter" value="," />
-            <property name="fieldExtractor">
-                <bean class="org.springframework.batch.item.file.transform.BeanWrapperFieldExtractor">
-                    <property name="names" value="field1,field2" />
-                </bean>
-            </property>
-        </bean>
-    </property>
-</bean>
-
-<!-- Step 2: Define a SkipListener -->
-<bean id="mySkipListener" class="com.example.MySkipListener">
-    <constructor-arg ref="errorFileWriter" />
-</bean>
-
-<!-- Step 3: Update the Job to use the SkipListener -->
-<job id="myJob" xmlns="http://www.springframework.org/schema/batch">
-    <step id="myStep">
-        <tasklet>
-            <chunk reader="reader" processor="processor" writer="writer" commit-interval="10">
-                <skippable-exception-classes>
-                    <include class="java.lang.Exception" />
-                </skippable-exception-classes>
-            </chunk>
-            <listeners>
-                <listener ref="mySkipListener" />
-            </listeners>
-        </tasklet>
-    </step>
-</job>
-
-You'll need to replace com.example.MySkipListener with the actual fully qualified class name of your SkipListener. The MySkipListener class should look like this:
-
-public class MySkipListener implements SkipListener<MyModel, MyModel> {
-    private FlatFileItemWriter<MyModel> errorFileWriter;
-
-    public MySkipListener(FlatFileItemWriter<MyModel> errorFileWriter) {
-        this.errorFileWriter = errorFileWriter;
-    }
-
-    @Override
-    public void onSkipInRead(Throwable t) {
-    }
-
-    @Override
-    public void onSkipInWrite(MyModel item, Throwable t) {
-        writeError(item);
-    }
-
-    @Override
-    public void onSkipInProcess(MyModel item, Throwable t) {
-        writeError(item);
-    }
-
-    private void writeError(MyModel item) {
-        try {
-            errorFileWriter.open(new ExecutionContext());
-            errorFileWriter.write(Collections.singletonList(item));
-            errorFileWriter.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-}
-
-This will write each error record to a file named error.txt in the current directory. You'll need to replace this with your actual file name. The MySkipListener writes to the error file when an error occurs during writing or processing. If you also want to handle errors during reading, you can implement the onSkipInRead method.
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-This BatchJobTest class uses Mockito to create mock implementations of the ItemReader, ItemProcessor, and ItemWriter. The @Mock annotation creates the mock objects, and the @InjectMocks annotation injects the mock objects into the BatchJobRunner.
-
-The testBatchJob method sets up the mock objects to return specific values when their methods are called, runs the batch job, and then verifies that the methods were called the expected number of times with the expected arguments.
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.springframework.batch.item.ItemProcessor;
-import org.springframework.batch.item.ItemReader;
-import org.springframework.batch.item.ItemWriter;
-
-import static org.mockito.Mockito.*;
-
-public class BatchJobTest {
-
-    @Mock
-    private ItemReader<Customer> reader;
-
-    @Mock
-    private ItemProcessor<Customer, Customer> processor;
-
-    @Mock
-    private ItemWriter<Customer> writer;
-
-    @InjectMocks
-    private BatchJobRunner batchJobRunner;
-
-    @BeforeEach
-    public void setUp() {
-        MockitoAnnotations.openMocks(this);
-    }
-
-    @Test
-    public void testBatchJob() throws Exception {
-        Customer customer = new Customer();
-        customer.setId(1L);
-        customer.setName("Test Customer");
-        customer.setEmail("test@example.com");
-        customer.setSubscriptionEndDate(new Date());
-        customer.setAccessEnabled(true);
-
-        when(reader.read()).thenReturn(customer, (Customer) null);
-        when(processor.process(any(Customer.class))).thenReturn(customer);
-        doNothing().when(writer).write(anyList());
-
-        batchJobRunner.run();
-
-        verify(reader, times(2)).read();
-        verify(processor, times(1)).process(any(Customer.class));
-        verify(writer, times(1)).write(anyList());
-    }
-}
-
-
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.springframework.batch.item.ItemProcessor;
-import org.springframework.batch.item.ItemReader;
-import org.springframework.batch.item.ItemWriter;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
-
-import static org.mockito.Mockito.*;
-
-@RunWith(SpringJUnit4ClassRunner.class)
-@ContextConfiguration(locations = {"classpath:spring-batch-config.xml"})
-public class BatchJobTest {
-
-    @Mock
-    private ItemReader<Customer> reader;
-
-    @Mock
-    private ItemProcessor<Customer, Customer> processor;
-
-    @Mock
-    private ItemWriter<Customer> writer;
-
-    @InjectMocks
-    private BatchJobRunner batchJobRunner;
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
-
-    @Test
-    public void testBatchJob() throws Exception {
-        Customer customer = new Customer();
-        customer.setId(1L);
-        customer.setName("Test Customer");
-        customer.setEmail("test@example.com");
-        customer.setSubscriptionEndDate(new Date());
-        customer.setAccessEnabled(true);
-
-        when(reader.read()).thenReturn(customer, (Customer) null);
-        when(processor.process(any(Customer.class))).thenReturn(customer);
-        doNothing().when(writer).write(anyList());
-
-        batchJobRunner.run();
-
-        verify(reader, times(2)).read();
-        verify(processor, times(1)).process(any(Customer.class));
-        verify(writer, times(1)).write(anyList());
-    }
-}
-
-If you're using a legacy Spring version with XML context, you can use the SpringJUnit4ClassRunner and ContextConfiguration annotations to load the Spring context. Here's how you can modify the previous test to work with XML context:
-
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.springframework.batch.item.ItemProcessor;
-import org.springframework.batch.item.ItemReader;
-import org.springframework.batch.item.ItemWriter;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
-
-import static org.mockito.Mockito.*;
-
-@RunWith(SpringJUnit4ClassRunner.class)
-@ContextConfiguration(locations = {"classpath:spring-batch-config.xml"})
-public class BatchJobTest {
-
-    @Mock
-    private ItemReader<Customer> reader;
-
-    @Mock
-    private ItemProcessor<Customer, Customer> processor;
-
-    @Mock
-    private ItemWriter<Customer> writer;
-
-    @InjectMocks
-    private BatchJobRunner batchJobRunner;
-
-    @Before
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
-
-    @Test
-    public void testBatchJob() throws Exception {
-        Customer customer = new Customer();
-        customer.setId(1L);
-        customer.setName("Test Customer");
-        customer.setEmail("test@example.com");
-        customer.setSubscriptionEndDate(new Date());
-        customer.setAccessEnabled(true);
-
-        when(reader.read()).thenReturn(customer, (Customer) null);
-        when(processor.process(any(Customer.class))).thenReturn(customer);
-        doNothing().when(writer).write(anyList());
-
-        batchJobRunner.run();
-
-        verify(reader, times(2)).read();
-        verify(processor, times(1)).process(any(Customer.class));
-        verify(writer, times(1)).write(anyList());
-    }
-}
-
-In this example, SpringJUnit4ClassRunner is used to provide Spring testing functionality to standard JUnit tests. The @ContextConfiguration annotation is used to specify the XML configuration file that defines the Spring context. The MockitoAnnotations.initMocks(this) method is used to initialize the mock and spy objects.
-
-@Query(value = "{ $or: [ { 'Date1': { $lt: ?0 }, 'Date2': { $gt: ?0 } }, { 'SubInquiries': { $elemMatch: { $or: [ { 'Date3': null }, { 'Date3': { $lt: ?0 } } ], $or: [ { 'Date4': null }, { 'Date4': { $gt: ?0 } } ] } } } ] }")
-
-@Query(value = "{ $and: [ { 'Date1': { $lt: ?0 } }, { 'Date2': { $gt: ?0 } }, { $or: [ { 'SubInquiries': { $exists: false } }, { 'SubInquiries': { $size: 0 } }, { 'SubInquiries': { $elemMatch: { $or: [ { 'Date3': null }, { 'Date3': { $lt: ?0 } } ], $or: [ { 'Date4': null }, { 'Date4': { $gt: ?0 } } ] } } } ] } ] }", 
-       fields = "{ 'name': 1, 'Date1': 1, 'Date2': 1, 'SubInquiries.$': 1 }")
-List<InquiryType> findMatchingInquiriesWithSubInquiries(Date passedDate);
-
-@Aggregation(pipeline = {
-        "{ $match: { effectiveDate: { $lt: ?0 }, termiDate: { $gt: ?0 } } }",
-        "{ $addFields: { subInquiries: { $filter: { input: '$subInquiries', as: 'sub', cond: { $and: [ { $lt: ['$$sub.effectiveDate', ?0] }, { $gt: ['$$sub.termiDate', ?0] } ] } } } } }"
-    })
-
-
+PK    Ö½:]3Á8Ÿ  J     [Content_Types].xmlµ•MOÛ@†ïý–/> {Cªâp(p,‘D¯›õ8YØ/íLù÷Ì:‰UÑP‡.‘œ™÷}ÉãËgk²5DÔÞÕÅy5*2pÊ7Ú-êânvS^’t4ÞA]l ‹ËÉ—ñl 3;¬ó%Qø.ª%X‰•àxÒúh%ña\ˆ Õ£\€ø:}Ê;G%¥Ž|2¾‚V®e×Ïüw'’?XäÙíbbÕ¹¶© ˆƒ™_edF+I<k×¼2+wV'»\ê€g¼ð!MÞìr·|5£n ›ÊH?¥å-¡VHÞþ¶Fh;>àyõï¶º¾mµ‚Æ«•åHÕ—¦>ˆ¤¡w?äÀ¹,˜r2ÒEi )ÃûØÊGx?|ŸRúHâ“èuO=ÝÔÆ\ˆübXSõ+µôh™<“só§>$ÒW!á	âéÝ…T<Èw+;‡È‘7è«%ˆx?Þaß<¬@Ÿ!Ðõ‰¿×´¼n[PtŒ‰Å2e«¿²ƒ4â/lOòºšAäÌ}Ú]þ£|/"ºOáäPK    Ö½:]y&K@ø   Þ     _rels/.rels­’ÍJ1€ï>EÈ%§n¶UD¤Ù^DèM¤>À˜Ìî¦n~H¦Ú¾½QD]XÁçïãcfÖ›£Ø+¦lƒWbYÕ‚¡×ÁXß)ñ´»_Ü–	¼!xTâ„Ylš‹õ#@e&÷6fV >+ÞÅ[)³îÑA®BD_*mH¨„©“ôt(Wu}-ÓooFL¶5Š§­¹älwŠø?¶tH`€@êpS™Nd18¤IqôCIçÏŽª¹œºú»Ph[«ñ.èƒCOS^x$ôÍ¼Ä8g´<§Ñ¸ãGæ-$#ÍWzÎfuÞƒQpÏì0±—ïZµØ}ÉÑ[6ïPK    Ö½:]ˆ†Si  Ñ     docProps/core.xml’ËNÃ0E÷|EÔMV‰óEI*êŠJHØ¹ö45MlËž6Íßã¤mZ +vß;Çóp>Ý7µ·c…’…‡‘ïdŠYþÛbÜûžE*9­•„ÂïÀúÓò&g:cÊÀ‹Q
+°žI›1]LÖˆ:#Ä²54Ô†Î!¸R¦¡èBSMÙ†V@’(º#
+ å)é‰“#’³©·¦ œ¨¡‰–ÄaLÎ^ÓØ«	ƒrálv®ZOâèÞ[1Û¶
+Ût°ºúcò1~Z
+„ìGÅ`Ræœe(°2ívù3@Q™Rw¸V2àŠísrqßÏv]«·‡–¡Ñí¨¬@‚¡Ü[vÞoÄ¥±ÇÔÔâÜ-s%€?td¸3°ý¶Ë8'—a~œÝ¡Çw=g‡	”÷ôñi1›”I§AœIºHÒ,¾Í¢è³ÿGþØ+ø7ñêg^)ÓwCþüÂòPK    Ö½:]ôÛÛë  l     docProps/app.xmlTËnÛ0¼û+]tŠiAQ’‚ÖAÑCÝ°’œ·ÔÊ"J‘¹1â~}ùˆ9†/õ‰;³;û´Êû×Af´NhUËù¢ÈPqÝ
+µ¯ŠÇæÛÍç"sª©VÅ]q_ÏÊ­Õ-	t™WP®Ê{"³bÌñpsO+ÏtÚ@Þ´{¦»Np|Ðüe@Eìv±øÄð•PµØÞ˜Q0OŠ«ý¯h«y¨Ï=5GãõêY–•
+Faý3Ëy«i(ÙˆFM 1`½ðÌhj{tõ²dé gm[<Ó#@ë,pòÓøÄ
+äc¤à@~ÐõFp«î(Û Š´ë³ S²©Wˆòí¿XAÇ 95ýC(ŒÉÒ#•jaoÁôŸXÜq¸ö³©;Köú;BØüD*ÚCZ“¶™±Êoóì78“­òXŠòäûæ°”@iÙº$}ÎÑ>E±Ë°«Jâ.¬!=®Æ'$–ûb+c)îWççC×Z]N[Ÿ5v%á…~¹åo'”k=PGvZâ÷hý.ñm1çàùu=êw8~¸³	—í	lýÉŒË¸lß—•>ÍWß$;‡œU{lO‘—ÄÛI?¥OG½¼›/ü/ð	›ùóÿÕõìPK    Ö½:]uÐß÷"  P    word/document.xmlí=]sÛF’ï÷+¦ôpÉnQ‚d{„\gK–œ¬îìX+9·÷¶Cr" ƒÌ ¢•º?Ý¸»—­Úýsþ%×ÝóE‰–…D“˜¶Hôt÷ô÷ôüñOoË‚]r¥…¬ž}v°·ÿãU&sQÍŸ}öý›ov¿üŒé&­ò´öÙ×ŸýéëùãrœË¬-yÕ0¡Òãe=ÛY4M=N-x™ê½RdJj9kö2Y&r6O–RåÉ£ýƒ}úT+™q­áuGiu™ê;\)?l´2ÍÜÇGûû_ÂwQù1®C$k^Á3©Ê´¯jO¨‹¶Þ…1ë´SQˆæ
+Çzê‡¹|¶ÓªjlÇØõpà3c `|YîfyÛ½PûÇ=¡>HóÈ±E9—(^ À²ÒQwxûØÑàÇ…äÖ	“]ÖOîGôc•.áO7à‡€Ÿ›‡ÊÂ@~ûˆû@Â?ñ! ôßé 	™oùq¨	‘;¿n¿U²­»ÑÄýF;©.üX î2–¥Q85}?`Îi
+¨ÌÆ'óJªtZ D€q†¹ó5H§©Ì¯ðoMÿ*úsÞ\œ-Ç—iñlçh
+¾“|ýÇÄß@ÿ5_ŸT
+Ÿ«´á9;U2o³†ýkZÖö¢š‹Šs°c^›WøxCƒ(3”«
+†¨¥†±€`P|¶”9/FLI€&[¤ªù;b9ÏŠa¦Ä|ÑhB—°ÿbÇBg­¦ùg
+^dÍ‚{ø^ò4çŠ)è#
+Öð´ü øx*€o¦dIƒê¶®WÞÀóSžU²áz½÷£V)ïßý“)>ƒ7±FÒc9×™Sœ©š§•ø‰¤ÓŸq8À‡rNcÁÃ@h?¹bðýÇVjƒ¤sÅ9
+©½›ç±–º†1`¬ƒµ>Øc/Þò¬m€‚0ÛTÀf:¾AÌ4ÄrúÏèa¡¨E–f™l«ù€™5«
+yF S;ÎA"ýØ¦¨g€x]¤^ž©tŽ3Åña…ÙùÃ½ºK¶€O»°*€H}S!@)£—ïÎÚ*CÔ¦Àj]xë¼‚ÇrË½=R±¥h,ô+Ö=Ü#€Ó,€$ì<SmÙ
+ƒ“ÐN˜æ%àá°o½$½d©o]ã`ºñ@Ôƒd‚ë	1•á•\âÆ5¢XèŒMÒ¸Àe(EÓpD_ÉAJ\°
+>ÜÂ.9%Àžðy¶HŽù%-#¦²-ˆ=²ù¹ZÚ"t4ù>k•ú2nV±¡1F¯ªDgDš¨óïßýÍÏâÒÝâ$ÑYŽMÛ|ÎOOø+¤"F45Lu‘K€¬éDBÍq±i¶°ÄÃÕMS7ÓVÕ—îñ2Š™<E7+Ç²‹¨ 	iC8t>Úc¯CÞ$<JXo›;¾æ%pÖó¶(x³öE+"4a¯Ò*s5)nQ"Ì¢ÍÒÖ,-_¡/ÌªH´…s a!k\Ç”p@ÑVKÕ˜E2Ö½ñ5.ó;Di›™Yªl! ×@â×ë˜s_µ•^k(ù*Õ BØç©î„ðïîJ
+hz,{ÇðÈK´–ÓUfJK‰’®>}+`¥s`¡Çïßýï†PoÞ–¸Óè[D ²1ü¶ÇŽd5ªdË‡•FÚNs¶€Á‰yºhsŽ¬Îßš¸$=ÏÿÔ4k–ÛW-*ÌNFæ°x*Cœ‚k
+Wo¸¨éÖÏÛæäv*d›³RXüŽÍPâÃ8F¯ºµ>M³‹BÎ÷<ÿdŠ§(y-2ÌàKÒ7Ñ
+¼.Ê8†‚Ÿ`Èº½³&Ý€—sY´}Ö%,¬ejXÀE‘N%ÚV 7½üÕnÂ!2
+¼ÀúA,!¯7 › ¹á$@)HAÂ‰L»œ;y¨qb´„Ç]••Ó0¼vXÊP±§’†f)%ä%r²"#Ç/‰Ý%ç A—ÀE«£¹H{ìm6Äâ÷‡o@€#ˆúdÉéÉ«;~~ˆêf #Àª+…»¸"¥Yeœ–™³ENª™<ç›£¿@6Ë%(‹›Ôòž·|Ày…ªP¶ó…ãV Ù êà1¨sÉ¾AÓqŽeÝ¨–èþ§ÿ˜DcMv[V¤`NÏ,sWí£Ñ5jÅÔ!d:@0½
+AÒ­óÎlƒ—¼%°üB{£mâ,íl#X¡}A÷Sý¡‚ïºñkØl~
+ÌÏYhéí5x+êd£È™µçÐ\Cr«Zþ`M((½Ðp—ãCd ]ÕSÜ¹¬OiuÅ€iÁ*j00§
+ #¯ÃÚm›M¶“¢hÞ)AP·`	fš•Y«HSP$øÞ›U0g 5¼Ð
+Þ&9,W²U^. ³nwJå¼–˜]½÷wmÞ¤Èl„·\¶•Ú#¯AŽ–éOø:¸[—(ÑÒ¤Š,e«²D2X%!%C\iƒÂÎËZ.¹êXÀ™Øç¸,qÍ4+`ÿeÆ)óÊ§[F¦ ò½©œ6À]SkÃ‘­ÀÀìœLñ²Ï Î¬‘AWó“=v8¿ãõÆûÜ¹9¿ÛÈ¯¹Çc ñ_o·×€M‘Ã–ü*`&°xÍwcÓ#Íª¡&¨	}°oê7¡¯ Êº )~t=Z‹®ÃÀ$—m”çzXU„<ÖánŒ¬ZZäÈˆ«&AóTzX7hktkq:\îëºxNÙ Þu)øÒÅúúÀ:8ét¢ØD¼U®ÇÏY`XfÉñ\|`áÂJÕØØµ‹2(q“GðGìè$9:‘¤û¤š˜œj®.½áBè4 h	p¬@Îšè;!=2Ã£ô,o"D[4ÃŽ8ê_ÞGYGë½À1jY\ò€	4ÿ±E
+ÛYèÆ—(Ât®{Õ„wcåÝê‚ÊÒ
+Å¶æMSðI`¸yC'A;'3'AÓ†^"IöFËML7´_Ô9ôÖ+ì"Ü™ƒgé
+Xþ	¢ã
+FŒ\vÐBL_ˆ”Ü<­Ízò¡3dÔÙÌ¨¦3``Ö SA‘¢õë‡8}=0NzÂÍÑ²¯ÐÒ„ü
+\M‘¼|ÅÑn¥<äðtR…‰—	›– ÈhÛ“NBe×i0ón]¬ó žû›K÷ä×8dZc SªÌŠKnzs˜„km5•òâºÀä( “3!CçíÚ•N¶‡*v‘d%6.!yÚj#—•…Ú¹[Ãû6Ö
+¸/¼ s\4Ô%¨è.Þû—Àe_9P”¥-èü
+vP…?ºžøhIiç–£à€µ.¶ZÂeS4wGD;:hÿ.SCÓ\VS3ëÍ­ª±Í©Wð9Œøæ¹* ],Œ¬8Îf°°&.(zz%¹¿Ä}i(0h¼tÕ­˜iÑVrË 8ºÕÂyaÇ%[
+§€1MÔÀŠÉa‰rlVF¢¤	×˜¥Àm¶†G))Kld—.¨n9ï]#Úàt
+Á×„qðFë`h5dg“¢€>9ÊLà¯0>8Z
+‰ŒV#‘i}ìÂŒ0åGO’/ºUúôøÏ`Ši@
+†´SŒ¥Ðä´10ÌL0­@`¬	6ÕRMÉÌ ÖG÷D ÉBð¼Ro©€ÏA)&|æ0R·ð%0
+YmCxfªCé{ÔoÑeDnØ¦˜ÁñNèØ¤Ž
+â$g£‹‰!ÁŒ1Õ‚¶˜2» ¬!ÜuÇfèÎñ|ÂÒK)rtº1èPînž%Ø¯Ã[Cgå,wKŸ¢4y„ 	bS?[9ñ‚Ï/! ³QQ[5/W—ÝÐMkˆ-úÊ ½WÒ›Á3ÔY€`&Ó‘ãÜ É
+¯[‘6£¾ÉÓ‘ßÚûdÖ=FbÝq>¼H53 Ü§w« =oçs±‡™Ã,%cíkšiaÿ˜aàÃ
+.Á:_ÐwÁO…UC.?ÝùW¸«¹ªù³Œ‡ìÀ·å³}óó™"£H¥è%XAðÓL(ÝÉ¢-«g;;îÊ™\Ú¯EÚý¾ï.ÐÏô­’~õßþÃ|£GéµûO÷-ŠÂÙ}«DŽçð†70?~üØÎê.—“Þ€yCfþ·ïË:åoÓëÏÛCjëÚ$Œ—ãtˆ{¶óh½·v#Y“Ž_á!Ò[Ñ‘ xìÌ®ÎD¼²ÄÓó—¦ê1¦c#AÙ™2`p\UÙBÉ
+ÃV&”Í
+›‰	K‚)Ï1ZîE`$³X5âÀC\ë3ö1²Æ_ÉFˆ«÷wKQ¡{èÊÐ‹C¦™°ƒñÁÚèZ±ÆŒ‰d>«ð¹Ð\/¶dí0pvž{Œ¼Bu Æ¾ŠÁÿ&™ !Wžä³ÝyÑP¢tbÝ(Ì¦ËDñîªmM8
+ëãã1«^FÇÂê¦ÎØ7>úº›hYçô$ùZœž®ÊQÏŸ66´þpyO‘Ìäôµ+ç?!ƒœ¾ÂfÞºm3Y,DËÖù‰©Gë•ÏJ~ÊY$VªD{ƒYbn¿Ñà.¨ëc¹m³ r@ŠÀ
+l.“JîÎåFn1¾Ê*¤wHéþaÏ†)¾I¥Í9Ÿ‰J4>òåÃÒSÙbzMÜ9‹y«k{S!ßÍïp<"·Q--\Âæõ²«Oò=Ð@£ ßS€Íksx¦ 0C~¢ð«­‘ô1ÝŽF£55ƒ„¦¶²µüzJ—ãØ\.ñÜ`æbƒƒ¢rRƒgŠcˆƒ3;¶²ÌW“Rù(LXµ·uÙT`Â‰K3øJ­A#½˜äÇÓÎ××Ø|ùˆ]ó%J¦y™bQN“^pç`Rë~£kÈ…äÌeJ˜”£Ï¥t7ì±çiAwÖ¦^°Wx½
+Lß.v'¢Ú%¾ÄP9µ¸š¸ô°îI;Xr3?¦ $T–Ò¤•¹ÄG=o/]X—€ûxª¦ÁpáúÚßTaI "°¹#·
+:úÔ¾¿bò]<.¡ŸÝ	PÀ¹W}œ­ ‘Œ6Úëå¬‰Äkª$Ñ¸
+jô>d1ÝÈ=È®‰JO®yXFGø`ëJ6BhÊL™BR“ésÎ ¬²¶èãYem
+PèÂw…üA¿+ìÕŽcÖ&ïM¤_æ¿‚Ì¬?X#¸¸(ºe Ñ:Áêø®Ï––Öl0E¯ƒ’Ì[(O&§L¨°ÏÝN—–L8%°,Ga¡ø.Ý•‘†ÆÔ1Ø¸¨Hý¢ w%6Æhª.…’•)±í³ Gâ-Ö„ÚíÃþþ¤¦šWß¾	5‰ÄÜªÀ|ÊŽëiyc&ü4|1Yè‘~<ÙÌ(Þ¡%Û‡8k×GÈÿ<dÒô©w,xZ @±IlQµ7„'P¾˜ø<=Il¨KZapèÒÐ7Æ<Ü[ÎMŠy4 
+vŠ®¬.¼.Ó6´áÓ+XÿÜÕa&iþCŠY’Íe7+NS~s­ðÝÔY8ÿÒ…<Ñí8{„ØTO#ÙŸi¼u)[™·VÃMBV¥¤®á°€é<afîêUÏøìï kèº:”Z€ÔÝFîR…—{U4
+Íg¸&Þ€ íJŠj	¶Ô?T]Ö](tT€Ó6»Â‚X°"@+´¶¥âhZPm¼GÕ¥¦ëV/ôé^P¹kmï\€ÏÜ"W†ûm7N›‚TÕÞÛçg|ñVÆ‚SÉµ.¨¬hæ²Õ]Í¬Bÿ7%Ñ$3¼À¤´I'(òë­¥)Ç‚ÁÀßu&EPEBõ¦£.mµ&7JMû=×¶XQ5ª«1
+Ô\xató¶P[¹Ùå„ŠÓYvöÈhj¹¸UÍ¸a‹aif×ræ‹A‡•¡}÷Ž#oªôt¥ŠëmaS^exÀ”bš\]•j˜	Azéš¥ø‘ªeðF²"d™–®dñøýÈA¸¤¤ÝR&vc·íÙš4Òà/ê^~Ç2ðTWOà•ãq[AâX6±…“+!½@qùÂ¥™xËM™6áÿgeÄc‡¯a±pfD
+‰\K'J&+|	:˜˜1•‰ˆ®eÑüFÏ
+ö	ˆzíè¤ã4_ý’-xfK˜Â=Ë=)
+´H«y\·ËÃ§Ž1/jÕŒÊn{{ÜK¯‰ng´z	>({òü
+7»q+-.Pdî[lª.l2¨x¨QÝ@˜þéœ7ÒCÌµ°™^Öv>ßðµÇ¤×ÐŒå¶'ƒu†÷ŒŽ¢,ÿŒnv¸PÀ©­Ítj\õ¦-írÜ9ô‹•À‘6z[}Í.N[÷lëÃ³"ePçll¡|0`XI÷Ü¹®‡°j¯ Ÿ/Ñ2òÚÀ¬øÂo Ââ6FÝí¡]²%|ž¾6X4ÑÙÁ©çd©.ˆgF´÷–a ÝÊà±8(_–O»à,ÒšêŽïác®·¿Ø#w©HkÒün7¶[¸f/©5ßo°‘·¿ÚŠÀCZkhš<@nóØoQA9uûNÏ‡€ïß9,Åüì[¥YÒ_*7ƒ˜,*õ~º£J	N7eö&“41ìœ°¦	‹é½â´FŒðb]j"Y›ºŽõ‘ Õ'øékø÷jÄ6ÄÌœø‡7¤EºÈ\$þÐŒðCÀv=®»*l³”®çJŒì°²×%Ð\fxÅÑ÷Cwc¦¸nU7ôéšôøƒ*)zYàô6Þ~8¹¡,Î§º#Aÿ‡–<<¿êžÙp[^üÁiOÀ¹Ðh—ï'¼£ÁòFLþ²¢õz¯ºUÞ{Fi¨Æ;FF87!Ê^>5qYœHðýa–×/
+…×Ô+Þu¨Ø\
+ü+×›+˜©ã5€Ä­Ú‘ LîÀŠÃè	¿*|.C{«ëV\9mŒ|4íXí¡	–ñ–®_k„Ó—7³ˆMûæE¦ãFÁ?AÕ¾G’k$Žaç15×r
+zQ7Ìu=†mWfÔÿ’a£)
+éwU#Ž5Í;tã÷ïþqˆM©+07ÝË§»™*^c§AŠÏ‡ÝÌ\–bÂÒ.×±Ú›†M%¥ –	ŠÂÇûY	 
+l­”¶S¸oÂc}ýË=Á2=±'S#±‡+ lsØßG¶÷)>ÆD‚Ç×8(Á¨vÿ¦•‡i«oÓ¦AU(Ýìøm/©
+
+ [OÕµ7Õ±/ºZ£cj#JÍEm%ð†n(ÕÙYÀÁ¶^/
+×¡ùdµ?õ˜uiÙ+_…ß«íöÒtMÞ°±XÐóaàY}j}ÖjŒ(uùyÍJàÿ–Î5 ]°Ø×WšQ’-åÊö'¶>ÉWLÂ\aâT¹Ég:ôóu€Z\Í¯ø˜¤P¿Ájk£`Ñ wa§)/IÎ_¾Æœl[Àm.;Vc3*^Ê¸jLsJžhž)ÞàL*¾D._Õ^vF-u³ëK³Žãï*èŽÃ¬±gä^rÖ¶	Š”Ã¾`AqV·Š}1*u¡5¾4zrŒ=ð¬ÃÈ¢® ã®¤dMI$+ÔÞPõ×ÉvßUeðn;6c¾f›ŽåD¼£kg_N¶…ä¦%™7½QŒêeP¥òÕû3¼†º×™ê'‚Ö¾e›„E˜Ÿ|õÕk²­îr²ü¸lkøü=l?KÏûZ¢AóJT¢W;¯`o0L
+üý	×¶ÛOüÖ9»aîýÿhÊäùa$h-Jº¹}†£`{ÕuK5
+µôÚÝ„Q ‘LèJ‘`Ý”AÚmÆ¨Mºš­ûî›3³—4ÁtZ·å¦œØÃa¾§f‘ •	þû¤àìªBÎGEîñ^£ºn»=˜s‹I&Ó‘kÊç#¡ÄóVybpìY‹tr’Ý g€ëÌFì¢ÂJtê·™F»Þd'h©!!j.1˜¢½Ö£pË¾/&]é0
+6Ò»°DŒw±bÄvŸJl­b,ˆ75ÿ¡»Ø9E£Î½ùKDF¾7;6À˜ÌNé›Ó×:+}|ý8-bÝÛëa¶GÅ¼’8ÆóÝ°FtíQa®ÅdpÜÐ]r”Y»[ÍFW`Ë	ÜUÒ¡‰³Z&«
+€ý<néEA½jÜxf‹¡ôÖxë¶š”8"C°qö‹Ç“&À½oR5çM×àíTŒôÚ¿ŠŠšBãþÀ—‡Ã†öö±Ilo7“9fëøå‘šÍiSÌ†³)¶Ú¯¶Jö[ ï}åÜ@ 8§m³£ð‹‚õÂ:ŽFÐªÅ†KÓã6î„"i¦‘\TÅN~Ó„w×¸…#ÖïbFÍ”@\¢wÉ<@$ì6güáX çFD‚³ç)Á®“Ý:’ømrnKß¯½ óá8ÂÖ»ÄÄ/ì&Î¼Ûn2µk[,¸Þ(¾!Jz™Š‚²D·œ‘ð0raµßÐ„ÝÔ
+3FV92d1•1pÊÉwgKÙ}³f¯Ûïçˆ¬àŸT+I$ÿEz|hÙïƒÚ>øVKÆ#E“`+®rá	›ÓÊ…E˜-»ÁÝÍy€_˜#~¥t1‘ß%:ƒú!b²•;ÎÀ˜Q’kµ!kwßG2ÇïH+^+œ˜C¨}NÖG`›‘˜›oŸbB\}rÏKyÁ½J	Ãj¾^<X æ¶Î-·M)E,¼²‰K‚8æFnÀ?×~']s2fâ>i1îÚî``Ërè9”0IK‘aÎavb'¾U›Rõw§¶ýýfõÂû¨kÐÄ[|e¯ÆK&¢œÐ…%]*§
+<Wñ2àQ°•¬v—©¸$ÓÑôcË°o“ [cóy[øR@ v¡ÍÃ”XpÍHæÌ®èeæDZsh®mÔ9¥²~ ø(ÊíyCÈî€Žú6ñØ¸Rd&f7oS•+°>*õ›B.Ç®½Ç\Ò¹d'’ZÍ®2ì7!Ð¥Ç. »¢Â£™I'ôÏ‘…MD7IÅÍ‰uTdÇ±î¬}Ý‹wb¨`î§ÖHø±ºúZ
+]7ócáŒ)º]‡)0
+Ø]F«Rf€uòº©Â¬r#˜¹ú¢ð§lzYeÐ8Â:ºÊAÕÐQ×
+–gšE…?8³ë©ÀÉJ›îÜ/ÓŒf•·¼¯1‰9x¡œ=—ØNâô$¬\ÄÂRjpKG# 5lUU[¹tâÚÞ$A¬`ðf8ýãM]_!©®ù‹ó(ª…‚zw![¥;ìÚ(‡j]Ç8{¶¼£Ì¡ûg8{-µ§sãÁk0Æ]ï#ÓÉlµc¹í²6?öŒ+®Ü‘j¾I!è¾<ÕªOvgÇù~s®gÚ%JÔ[Ù¤g+í™ks\|—’˜„lÂc'‘UôBÖ›[²g½BíÄ6›%=2agð³­.¥£ö@Á%[3ŽœÀWQá
+<	ýr%¯D)¨^C€	;<¼qåËõ'„OØ›—×â9ìr_vþªx TÕJ§Í	{ñŸoºˆK`Fû°q¿uû{å
+ÏÏLÃC½%M©’K0˜4™‡¨7…ÆãnÓ®RtÓ¬™v¤ø–L	S!gkÎ
+^¾–vÛ|ÂüÕW_­É+ýJ¯&ËKƒß'ªk×}múa 9}	¯ã€ãðÞõÃÀñ:º¼‰Ž¿DB—óWqÀq	 à
+
+„kÿØ3*â@ÕQ`&gq 	>"ãÞÇ¾m±ñ›ÅÆ-`< ˆu'ê¹ƒ¢ÇÕVÊnÁØ‚Ÿ”Œ¥¬­æ¾ÓÖ¶Ot‘8‡‘,ë-‚ÉJ‰Œ[Œ£“µ74úí¡u[Y![cFä`Ü"ùPäúXþ8>W6=Ö>AÚŠ¹-‘¯”HÀvçÞ@0Ýp˜A‹„p‘¬¦müxFôk%0bÜ¾±ÇTô b£üoŠt‘€É²ŽŒ­î‰’IããÁ¤íÏ}êÎ§BÀOpqG#ì"#²DÂ¤‘€£…»æ£8?Í¶ØØ
+ÙÀˆF÷EÂ¤1š¶HÈÍi™Ô&ÏÌÎ¹ÝA=Þ>A0"YÜ‘€±-W‰EããÁäíê9¤þ@×èQö	.§-·‘HüHVJ$`ÄA¸&jý‘aqà,ÒmÁˆPÖFÆVÖFFŒ›|_|êiê·“Å°HèÉbŠD´lÁˆŒHVJ$`Ä(hÖ3ÕµŒq‘Ð/’E	‘¨ŸH¢‘eFì÷¹9/	ÎÂÃó8/ÄýýMÑ.0¶ª'BllÁè)â_AYÄƒ‰Û°KBpúÑ`Çšü¦8))	[7B0¶+åÁx0‰K=÷»ÓÑ2Y‚ÄÍ··¿>úÁˆDÊE¢z"Y)‘€c4Áv7§<šSÜQ_¿kŸ |‰ŒHˆ²#B1	‹ÆØ‘&¶]²Lñ’çbkßF
+Füìü	ŠºHˆ	‹FFŒö-m'«•Ì°Lt§ïÆ±HØxF„`l%m„ê/Ic¢ì”K<Ç´¿uW7élMeÂ–‰"\Ù[9·#ò•²YÜâspr<÷{:ZñZqM§Á7îÃ¬þf<Q~ÊY•–xÜuƒ<×Ešñ…,r®XÙê‡aðjŸgxø<ŽE‡vãiÐ¹¬<û©ÌŽ:@ü¦íf£upi^§¸ó—ž§z^Yˆ+
+ãéÖxnyqµÇÞ¿ûÇÙûwÿÄã¦WŽçfA`9ç•„ç¼§™¨Íˆ¢bs<ç½Âýöë¶‘%üš1l ¹+g³M§V‡T½ËÁç÷,œ½SÍÇþpmœè­P<¿ãk7"$«™P%Ò@2€ñy=²v³š”énIçŠ“.íØÉ²\p Œ"ò4ÅùÊáåÚŽŒ¼…÷¸CÏñ7<Œ¯õ	uW¼n˜àáZ. ö^¾ŽYvî:áûsÚGëoGÀÃvw®sþÀ ñZ2¤ÃÿˆÈÔí/2‡ºK×ë.º§¹º7§ÜÛÕ˜‰	‰ùl¸08ÆKœŸ¾õŽ«'z\qÅKY	®Ã+šei…’&êÈBäx\üÐlA$³‚¶Ÿ^áŸ[ŠfAgÜ§Y&ÛªI§Eˆ=þùA4¥ŽH
+¬lÐÃxÎ›î<œy›ª\¥¢ÐcMÀ½³´- f..EÞÂRl5JLAd) …äÎì1>bð”Â*2àwƒ8±×	ÌOgia%¬ó9¤gu*
+¬b¨ ½D®T$_F¶Á›Ê¦)xÅ³Fiþj¢IH¹n§€ÿÍÏ­fVÈù ’ù\¶
+Ö¾Og²æ¨ÖíÞë+ÜS%ÊT]1MOYëp9–^N"òoŠK5ßkÞ6ìsøVâ'B;Ê\£
+m¿xœ(Lš~÷£ú«æ»HlÏ’"ûÝ;“0Ÿ)0lž*ò{ÄJTÌàë<m,¡K™ó‚é”paŠ‹ U|¥¾E³)•f³Hì œ)Qš13‹nÇê´ºb5¬ÔTð‹·
+êÐÂÿ ªˆB|ïEÑRgqi°Š£Û:M¥6š£¨æ(¬Œ’Ë¬EîXOZ
+2ù˜~¬´ÈÏžíìïsôô«Çßì¸K§
+/î?ÝúøÈ]<‡‡èêã'Ožîà83	ØTg|	üófœYl;LEþlGädÌÁÛçç?ûîàÑ£'û8ô>ÿáË'ûî†W)ÖÈ®ï?þ‚Þ.æxõÁÁ£Çø]–øóþ—ø½à³à×)Åg;_<¢á
+ˆþë¼mè«}]&¦ÆœäæºØûV‰Ç]q*š |üÔÙ˜}ôq*ó+úàþõÿPK    Ö½:]!	JT@  K     word/_rels/document.xml.rels­”1OÃ0…w~E”%q[ -¨i@ê
+E°ºÎ9±ˆ}‘}úïqi•µXïî½Oç“g‹/Ý$`BSdÃ|%`–ÊTEö²z¼œf‰#nJÞ "Û‚Ëó‹Ù4œüŒ«Uëob\‘ÖDícNÔ ¹Ë±ã;­æäK[±–‹w^
+cfûéü—g²,‹Ô.Ë«4Ym[ø7J©Ü£Øh0t&‚9Ú6à¼#·P‘îëÜû¤ì|üõñZ	‹%åõ!y—89›øª¨~„÷Z!Ž›¨k "ÿ¾}–ƒBÇDø„õó	EOLb‚H4´âëŽ‚˜Æ„ ?Ûø)÷â0Ä0ŒÉ 6ŽP¿ù´Ž#Ï*S:H3ŠIc6z
+Ö_Â‘¦“B·qo	lÿ0vu·öëœPK    Ö½:]ŠbOÐ½/  ¶U    word/styles.xmlí]msêF²þ~…Ë_ò)k„€ÔžÝ$mR•Ífs’ÜÏsŽÙ`ð¼'É¯¿’°^f¤™ž–4#µ]•˜–úmž§™éùëßÙßýw{:ïŽ‡_ÿ2úên{ØŸv‡Ï¾úåçàëÙWwçËúð´ÞÛ_ý±=õ÷¿ýÏ_¿|s¾ü±ßžïÂÏÎß¼l>Ü?_.¯ß<<œ7ÏÛ—õù/Ç×í!|ñÓñô²¾„ž>?¼¬O¿½½~½9¾¼®/»ÇÝ~wùãÁÜûd˜“È(ÇOŸv›­wÜ¼½l—øó§í>ñx8?ï^Ïéh_DFûr<=½žŽ›íù>óËþ:ÞËzw¸
+3vJ½ì6§ãùøéò—ða’;Š‡
+?>ÅÿzÙßß½l¾ùîóáxZ?î·îÃîÿjîé¸ñ¶ŸÖoûË9úóôã)ù3ù+þ_p<\Îw_¾YŸ7»ÝÏ¡Ôp€—]8Ö·‹Ãyw¾²]Ÿ/‹ón}ÑO®E¯?God~rs¾d./wO»û‡HèùÏðÅÿ®÷î-+½²:¯í×‡Ïéµíáë_>fo&sé1÷ÃýúôõÇEôÁ‡äÙŠOüZü+üºÞìb9ëO—mè¡Y¢A÷»Ðï­©›þñÓ[¤ÚõÛå˜yM„d‡}()=t—Ðy>^}8|uûéûãæ·íÓÇKøÂ‡ûXVxñ—ï~<íŽ§ÐO?ÜÏçÉÅÛ—Ý·»§§íáÃý8}ãáy÷´ýßçíá—óöéýú¿ƒØ×’7Ç·ÃåzûñMœŸüß7Û×ÈsÃWëÈ&?DØGï>gäÄÛ½ßÍõBAj|ñÿR‘ãÄ^,)ÏÛuãwãZAsAs\©!lõ!õ!&êC¸êCLÕ‡˜©1‡q9n®Î—ý¸=¯ùDÉ‹j?QršÚO”|¤ö%—¨ýDÉj?Q2xí'Jö­ýDÉœ•ŸØ¬ã¿KŸ™ûÀÏ»Ë~[›€ÆŠ©.Iûw?®OëÏ§õëó]4·–¤TŒðñíñ"v«cµ[ýx9ŸkÅX–šÿåõy}Þë)ªþçøÜýã´{ª5áÌ3üÁÜ¯7Ûçãþi{ºûyûûEöó?ï>^QF½]ÕÔðýîóóåîãsœ4k…¹¥×ÿýî|©œó(uƒÙÐåø%ðnŸvo/©jÐˆk+Š°êE8@‘Da¢2¾Àý»Àñ#‹ÜÿTe|ûŸ©Œo×/i¼·Š…×T:vWÇýñôém/œ¦Ò|!öÒA|_(IL¥#8—>ï›MÈÜDüT!JHQH¨R”3«„,å+!K-×J’Nº?mÿ»;§øVÊ¼çÖ¬½1›£Qlñï·ã¥˜ZŠ,þ»Ãe{8oïÄ¤ÙŠ°17ßIØXmâ“¤6JR›
+%ÁçDq!ê“£„,µYRBÚt)!gÞÀ_ó¦€„yS@
+Ú¼) mÞlœ£HR#+‚p’·€ œäÝ8‘¤ž¼ë…à%oY8É[@Nò„“¼È-Bò‚¼¤ %oYhÉ[@Nò„“¼á$oA8É[@Nòn´%./yÈÂIÞ‚p’·€ œäí´’¼¤ $o)hÉ[@Zò…“¼á$oA8É[@Nò„“¼©'ïz!xÉ[@Nò„“¼á$ïI+É[@
+Bò‚–¼d¡%oY8É[@Nò„“¼á$oA8É[@zò®‚—¼dá$oA8É[@Nòv[IÞR’·€´ä- -yÈÂIÞ‚p’·€ œä- 'yÂIÞ‚Ô“w½¼ä- 'yÂIÞ‚¤sC´Îv¿½^ž:FZÕ ¾Vu}ïõÚ~Úž¶‡ÀJ
+EéJHT\[¼<»[ØmsDXÔîq¿;ÆËlþ(=­Z–ü¯ÕÝ·ÛÛr»ÂŠ÷’ø‡/¹íBÑ°ñæ·ð—?^Ãñ^³«}ž®ËÍ“EÃñ¿{ºmë‰>ÝÄ]²*¹ßk"5þ÷é†ZòžÑ(X¹s;¸¾‹·Aj<%7›¼ƒ¹“ìÃýâõrŒ==Þ–þý¾ÿk<KÆJ·lÅÏQóä·gt»=•žõùz9õ¸ý¯K
+ûÝá·ôúu¤Õó:ùØ»©ÒwÌ“-
+y7bèÐwÇ³e^‡—õã9ùú¾(·…÷þùz<¸wÜY’°2ï9E ìö–¹í¦ŠOÇ+Ù&öédëšsûƒ»u£ìM¨†õ&¹½ÍÛùr|‰=²èj¥Mp}éî]¡;${%nË×â«ÔY„§~Yo
+ŽÇÃ›>]/ËxÓu$ò&)oÊ(­h‚ëKªÞdÙ¼7%yÌÌN×=u.uØþ~I\‘˜Jg¤ýß¶Û×Bùéß‡¦??äýäqûéx
+5àÌbï¸¹Mü¶ãÛ%r—ïÿ»¿	˜7Ò}ÄëÿTì@Ž^äî@Î}ò}rt9Þ\˜¡î¼Ýùu¿þ£8SÝ®_­týïêªMToS˜c/'óâÄfÒ+™ÍÊ“]¨v‹ëP¦CYÅH^ÍùX²/»ÎÇÆò1ææyÁÇl®Ù˜>fêc–>Vç3N0/½èÃñGcrÎÛ1«#8‰ÃuÓI'ygÚúŒ­«Ïì®ÿíÂƒ&\š`zÐ¤äèãA9/±;¸~­Áò’ôrT§š~ãrýÆÅô·~3ÑÇo*rMû^4åzÑÓ‹¦ýð"×/rFÑoÑ‹.¡.Þ}èç]Ôi‰áB3®Í0]hÖšêãBr0'Ç¹X¼~„àKs®/Í1}iÞ_šéãKˆéËÑr%WÎ÷DÌšiÑ9-8î3sþ}_¢6>÷·ù©ü‚ë.~K]·ÞÁ/û¤Øþ¸ÿîù÷—¤~½Ó§ß×÷éWÛýþŸëë»¯ü·î·Ÿ.×WÇ£ãõÇãår|á>.àóxÈßÌÃí!øú>¼½<nOÉ·“Üïãneu_»|(jZ6YþpL[)1n(}©Ú=Õ¾ýlÿ¶[u¿øÄß¦_$`|ÍUQ=-ð•¥O5#—~mwÌÇ¼‰½À)x/áKØª4°…d`«o–Cn.¼Z.iN»Òœ6’9íÁ™
+±¯Ë„Šö¸^ÅÀÖñHUÀz<Ì=¯Ë§SÄoºG'kžþŒpðÝu’Š¾…Õ~Ušˆ*ÓñKsœ=™å"Y‡Ë¾­÷ÉÌ«&¿ƒõÆÿÊí¦¡÷ŠZDeN7yŸ+nÎì”ÓÍÄÂM7ï~ÇômÕ<“	¾Kë™eò¦œ†H ‘ëZ\ °ø„ñu¬¨ÅÙyëÖ¶hÞÛÙ+¬2AÀsH/®ÿØíË_Ð'/vž/j9¼ ÆÈ;ËxR‚Œ\`9¸¹ gEž¿¨f„¼ßñÝDÏ¤ ±•Ùñ1ì÷E£ Ö¥‚²µlÔ»¸Õ2¢%þ£z$ ûÐËãÓq›åâóF/\0×=jÖeÓáPVc.coæUWÆVn›zdçž€«ÕÐ¾©½FG<…@Í\^ÏöþHõ+ÚXOP½t
+ÛÔ7 œ,‚l²”Â
+½a9¿bÐ7”Wž½?UýÚ3Ö#T/2k0ðos]f·£1F.AäŸ»B›X>Â/CÔø²‚øS(sæÌ—*Þ’6íëB‡çõástüÕ}²wž±œ[“Öî
+>»m¹Á|T	Zyör&‰Ÿ½>‰4÷ìãÑ¬¥‡_¾í÷[¶ßß%¯µ«†ÿñÝí­.Ø”8ap}±õh`«ÂjGœ¨HTÑvp°Ua7­Šâ¯=ÙšH^ÓA“vôÀ‰Žë‹ÍF‡5wí¹' 
+·Up¢#QE£Ñ!¬ŠiÓªX…ãíoå¢c¬‹Û«íê‚¶ËÀª‘ù4}jN¬¤/·-bji¤L“U'nnji;rÄÔÃ1t½üs½9™õ«—è•2º} …¨2´ÁØ/) ºëx+ðdš°.ÞÆãô«
+î;¦é×!¼wXöÈ©yÇŒ±i9÷Û™ÔÜ©Î®I~¼>um—‚Õñí´»’êäëÁôJBDo 
+k=^wÏ»BÑâWQj}ï>*EÝ³¾Õ¥:Ùw=2¦¨´ëÕºô#ò5Y<RUŒZRû¬V|'1ŠØ«GQÝîýÉ˜ÚSõ¶Œ	øJ3BQ¹-‰E]¥Ë{¤å=78“ÈÉ/­Ôó+·Çë[Ùk(iÅI¥'HVœôÁŠÍïÔ’´[i;Évnl×öž;IKN+-9E²ä´ç–Äß÷&iÆY¥gHfœõÁŒÝì=“´ç¼Òžs${Îû`O
+÷±	Òjw',Yu“\‡’$ÆÂ¢	Ó~ª	ßË:‚pnŽ‘‡¡ð3¶„ˆ¶0ÌEàû²½ËéÈØÍ”\–‹0»² ”4«,ècÝ:ìö‚ò£I-©gHh%­NÙå†üùµe‡¬¸ªêƒÝÔu‹{Ÿ¯5cÔgçvÜû7Þöxý«>´õ`˜%›Uº‰êdšsÈï
+þVÕ™[È¼ßrH±w³j#Wíf£Y²Ì£nÎ1ª¢qõTê9­œp¥¶ hæNï}©9þôþU=Ù=ÃÜ¿C3«Ñdäp4“®Ï,dnu·âë«Üé[Yaª EU}ìÍ>ˆJz•³÷ fº˜+«ÑFV#K-à˜ÿZ¥Ð‹*È6Igé ¿;]‚„4ÓÍ¤Ü‹džÅ%Í-Þ•]‰Î:(ë$z%>©’lÎÓOj¿WÁèp ×(cy<=mO×ï¢ãF5hs”A›ï»N“6 ÏŠâ\ö§Ó ï¡%¶ßª}üWØÇJê7¹kI9âÓ‹’“PKQ2'5AÃÉ­ÅÏ8átJ×t	~½™^Ìm_}¸“Î˜©ütü²\ž>îþ¼ég|‹Ïøáðüw`DøŒã¬5ßâŠïƒ—ÔÄÀx7Õ§Û‡>íNçKhÜ{¦+¦¤;ßZà—¬ÒPrcWØ$W6zBv
+8ìö¹G!åßDryáú¯…ë9}<¤ZzÈ’cÖýš¬Ú?«ÆÁÞÕ}
+D=i¨Ç0íÝž®+kÌÏ4¾^Cû>ß&ÜÍ~»>áMøç§Ý>&zÑïÍêA|1?KF×®µ;¸É’RÏ·ÇÓŸƒWš}½HÊ9•-=ø}>ŠæX
+ÐrÌL´&ðµ$u‹”	±i7·xÚì. ‹PY–›1ÐÄ³½À÷Ð¤8g»¡*H½±¶À1Ð{'œæèmîØ®íð¾+êzøR’Àk‡%ô¦ã/à
+hs¼€,BodYBoÆ€?áÉûì˜'ù«CEo¨
+RDo¬úôÆÞ°¯9z›ºsË^±Ý'ô6_.£ÖÔœ'ðÚa	½é8ÇxÚ/ ‹ÐY–Ð›9àÄõ}oÂ'vîê`Ñ¦‚Ñ[ùÈm&zcŸ¿­9z›Î|º`' ÷’\ÐÛlä:‹÷ à^;,¡7çxo@›ãdz#Ëz3œx7ógLpâä®½¡*H½MÄÐÛÄDôfgÎ|ÉN@ïà¹èÍY.V+—÷ à^;,¡7çxoÀ[U/‹ÐY–Ð›9àÄòA~WyÎ4zÃT"zsÅÐ›k"zómw5âÔÞÞóRÐ[0»'Óºð^;,¡7çxo@›ãdz#Ëz3œžïxÅ
+•Å9sÈè
+UAÒèsðc¤îñ"0­ö„kü¾:º£*©ýú6©lðC
+FZ~’Ä?EM?®7¿}>ßÂLÉ %¹t)œ¸
+6Ín•—Máf€ª§ãÛã»«»æ008£CW’Â‹d³¶m‚°5=Sâs•¦¦Uí{ wÓÏS+–>bÛ‚Uó­†Œn)à…žP.Í!z¸T³h—l‡d;ÔËë5“E½ðF3LÔ»ZŽ\×*ê•ì¡w³×S›>¢Þ‚Uó-†Œz)à…žP/Í!z¸T³¨—l‡d;ÔËëÑ“E½ð=„zUûlèÝ¤äõÔú§¨·`Õ|ëŠ!£^
+x¡€'ÔKsˆ.Õ,ê%Û!ÙNõòzeQ/¼±¡^Õþ$z77y=µLê#ê-X5ßòcÈ¨—^(à	õÒ¢‡K5‹zÉvH¶SA½¼žPYÔoE¨Wµ¯‹ÞM¡`ëz¨ÕTQoÁªùV)CF½ðBO¨—æ=\ªáu½d;Û© ^^/­,ê…7Ò"Ô«ÚGïfZ ¯§]}D½«æ[ÌõRÀ<¡^šCôp©fQ/ÙÉvÒ¨÷§ÝíÆ/AAnºÂ™@.5(³ÐóuÔ_QG% .(OÁñp9Gƒœ7»ÝÏ‘J?Ü¿¬ÿs<}»Í²
+1Æâ¼[g_ô“kÑëÏÑ™ŸÜœ/™ËËÝÓ.Q¤"Š53¢Ç:‡4¯g×]©Ú¡UFFõÝJ°£6.¤©ÚÜÿ'BN•ãROÉ®m&Q_]¢ßÛ¸ÙN¸Ùkít8'0ºiëgùY?ýµVWÓo5z‹z¿U*ÞQ¿5È¨ "žð¸’1Jýa©„arts‹yº„·Z-£ÉÖ›TÒ£fÃùùA×â÷(øÚj©­•í$Š0ží¾94@öª¦å>òN©žÆ>×\é|NŸk¢Èk?Ÿ-ÂÛÏS°dsj?+0*¨(<®d”R»|*z˜ÝÜ" .á­Võh²9éì
+‡üü kŠ€|m0¢•í$
+2~àÙ»{fþª¦E@òN©žÆ>×\|NŸk¢È;'[„ŸÆCEÀ’Í©¿À¨ " ð¸’QJ§QÑÃäèæu	oµªG“³PP±¨c<P8PPÃûÆd¤Yði[$ÛIÚN¦ ãú¾7¹œ?82{UÓ" ùF§TOcŸk®H>§‰Ï5QäN˜-Â'¤"`Éæt8‘À¨ " ð¸’QJ‡)RÑÃäèæu	oµªG“çÔQP±¨c<P8PPÃûÆd¤Yði[$ÛIÚN¢ ãÞÌŸÝFÎŸ£½ªi|£Sª§±Ï5W$ŸÓÄçš(òÎjÎág5S°¼œÎj¬ÖPt\ÙMût¶4=Žn~O@MÂ[±	ZƒÇöRPµ' †ñ@á@E@
+ï“‘fÁ§ml'i;™‚Œå/‚|'¶÷³W5-’otJõ4ö¹{’ÏéásM]"`zø1Š€ttµÀ¨ " ð¸’Q*tÔ6{^ô07º¹E@]Â[­ê!žTì¦¨c<P8PPÃûÆd¤Yði[$ÛIÚN¢ x¾ãn#g2nîª¦E@òN©žÆ>×\|NŸÃ(þsû´{{ùø¼~
+ï°|4ðõå»äu…sÓ½×Tþ{/ùŽ¢ß¢µóGƒ_SÀ2 ×Ö¥e€JíÒR •wi!°õƒ’b¨â'WáÈòDé©‚ø§¨úÇõæ·Ï§ã[£î›](AñØj<òŠÉu0¾Å?|u½/Y ÕNÑ¯¥ExäÞúº·rí
+±ª®
+"À«QôËàìµv(yKI«g¦„Mx2œ”$ËêÉIºHX
+"K™.£÷°J¬‰"2u@ä &ˆ[‘D|¥/|…"³›Èl
+ŽÎ=dæBŽn€£ƒiýìwÝ8Œf'ÞkÉbÊ¯óXüøub1¥l¸
+¦Ë)§Ñ®…6…@¤€N:È};Â]Z±˜¾°ŠÌn"³¹Bfî\Ãü‰—Cf1äè8:±}Ln)ivd¯–,¦|r,ÅÀÏ%SÊ†K{µšq:ÚhSD
+d
+ÈL!1 #/ˆXL_XEf7‘Ù(Ì”?²kÈ,†Ý G'£ï‰m±½ÎÔ’Å”¾ã±øxÄbJÙpÌKNMÇA›B R@Nä@N ˆ±yAÄbúÂb(2»‰Ì¦@@ád‰ü™#Cf1äè8:±}¬jkE™^‡&iÉbÊg÷ðXüb1åõµ³ÕÈsØÙp‚6…@¤€%ä@%ÄÀöÅH"ÓC‘ÙMd6¶/&ß;ß4}È,†Ý G'£ï™m±½N}Ð’Å”à±øÄbÊçæËÑ”“
+]´)"Ôí Òþ vŒ´ b1}a1™ÝDfS  ÐÛ3ßõuÈ,†Ý G'£oÓð¶˜^m«µb1µ»úá›ùá’îiEéí;Ê<=e£À²€Gd¡Á-)(¹Ia‚.djg[t“œcdÞÕ~ì±éQu5}9¨ðY[Q}SXïL†­]ÙŠi—¾(Vê¸&ý4áÍ¢ßŠ¬}% Ûè3èD·û=l#¸¤tâMoà…œâ¾ÜÇšÁ	ÚuM.E`[ê
+°‰mÛ$¶Ù·”$³ØÊ¼&ÄÄ7±ŒO|Ó8“¡Ç+1ÎFTKœ“8g¿AqNýt¯Ì9ë¿ØToWNœ“8'qÎ¾¥$‰ÉÚÀ–ÑÄ9±ŒOœÓ8“¡Ç+qÎFTKœ“8g¿AqNýt¯Ì9k›Ë[êÍå‰sç$ÎÙ·”$1YØà›8'–ñ‰sg2ôx%ÎÙˆj‰sçì7È Î©Ÿî•9gíQ –úQ Ä9‰sçì[J’˜¬
+lÇNœËøÄ93z¼çlDµÄ9‰södçÔO÷Êœ³öàKýàâœÄ9‰sö-%Élb2¯y>qN,ãç4ÎdèñJœ³Õç$ÎÙoAœS?Ý+sÎÚc6,õc6ˆsç$ÎÙ·”$C;Ì;ê€8'šñ‰sg2ìx%ÎÙˆj‰sçì7È Î©Ÿîå9ç÷»3¿Ymô¢BƒÚI;ä’åP…ä‰Ce[g]I3fÊó¨š‡‚‚U¯©²ØÄø§àx¸œ#¿;ov»Ÿ£çÿpÿ²þÏñôí"ŒÂHâ6„H‹ón}ÑO®E¯?God~rs¾d./wO;e4Û}9=ËöêÑã8pæSuNr×-jÌ9mð:G;mn5Š~0ôz‡Ùk5×Å1G]£ü+öPï’O „:í&•iµîÚa	ˆD„,Üo(ÒeìŽ¨w4HâÙ^àûÌª¦n õVÕ`	·—r–À),Á…%…fŒ¹X´à!^;,ÁÃa‰…û
+KºŒ!ÃõŽKü œíÙ›JóW»‡%¨·ªK¸í6ó°Þk“`	.,)ôëÊÅ¢
+ñÚa	–K„,ÜoXÒeì–¨w<Xâú¾7aÎõ¶n°óVÕ`	·#[–ÀÛ±,Á…%…–.¹Xtà!^;,ÁÃa‰…û
+KºŒ!ÃõŽ÷%NàÍüâòæôõ‚%¨·ªK¸M{ò°Þ±‡`	òÚ’ü®ÿ\,Nà!^;,ÁÃa‰…û
+KºŒ!ÃõŽK,ä—f¼ß£f°óVÕ`	·¯C–À›:,Á…%…¡¹Xtá!^;,ÁÃa‰…û
+KºŒ!ÃõŽKÏw¼âæ–ôõ‚%¨·
+ƒ%ÕK]á+\ÝVQHÓÉ OíF¾ì~y}÷öàÓÎè:tvþ3Õ••DëùÏÕ9M	NI÷Y°Óßb)‹û°AƒT´s¬¦Gÿšf;[5ãïlÍ!YÎT½g´¢Ú™žzêî†·¯êz¾d5¡oêÉt{RáFØN}®º­“‰ñZ ê…`©÷B JÖJ&°™Y~Öëj‡4ì»W„AÔLÖüÆÃ¦&É™dÜ=Óˆž	ØÎTÍ·NÐ¤§ªžº¼á­û¾$š“´æD4
+DÓj¾0Sï
+C4­4M ¹ƒüÜ×UÇèvïƒhš¬ù‡NMÒ4É¸'š¦M°©šo¦IOU=uyÃiZ÷}š4§iÍ+ˆhˆ¦U÷Ê²Ô{eMëMhv#?÷uÕAz†ÝKÌ š&k~ã¡S“4M2î‰¦iDÓlgªæ[§iÒSUO]ÞtšÖyß:ÝiZã
+"š¢iÕ½-õÞDÓz@ÓšÉÏ}]uža÷V4ˆ¦ÉšßxèÔ$M“Œ{¢iÑ4Û™ªùÖišôTÕS—7œ¦ußÇSsšÖ¼‚ˆ¦hZu/UK½—*Ñ´Ð4fˆ€ÿuX„íôt¯Yƒhš¬ù‡NîM“‹{¢iÑ4Û™ªùö÷¦ÉNU=uyÓiZç}u§i+ˆhˆ¦U÷–¶Ô{KMëMh+?÷uÕqz†Ý{Û š&k~ã¡S“4M2î‰¦iDÓlgªæ[§iÒSUO]ÞpšÖ}ŸwÍiZó
+"š&LÓþqÚ=q;<F/*4vœ¶ÃÊLâ8Î(úe·ôâÕí—¸Ü'-ôE•´HXZH!‡5+æ×fÅÊödó¬Jß_arùx}jÐQ9CÁYÑÓ[Ì9[
+{Ølý
+zØ´Ãƒwoêš>_!zÓgÂ¥€Ÿ.£·…$:€Hàˆ B€ˆa¸ I” /h 8A­õd‘Ìc+0½l1]ž¸—u‰PoU
+/p»æñ¼û(á…r/³`ºœr6É[Ì°uLHuûÈ4Óˆá¸ I¼ /h xA­ZñÌc/pö-¦WØËºÄ¨·ª†¸mðòxÞðB)ì—öj5ãìÖ´™aÁ)¼ ‘À1 ¼ $‰ä
+/(5ãé1^€yáö·]žç-VÂ^Ö%^@½U5¼ÀíÇ”Çð~L„ÊMø‚ÙbÉ¡	3ìA­þ R@mjr ] b@x.H/È^Pë
+Ñc¼ óÂL/[Ë1gµ$ËËºÄ¨·ª†¸AòxÞ„ðBùkÈÙjä9ì°Ÿ0Ã´~ ´~ ²~ ¶~,Hvý‚´ ¡à¥íÉ=Æ0!¼À^0ñ&>û[/–—uº~óVÕðw‡z/Àw¨^(ïw›/GSNØ»Ì°íªHíÈl¸ˆá¸ I¼ /h xAmŸ\ñÌc/°½l¹Z,Ø“0ËËºÄ¨·
+ÃÕëáËgíÀj`Ó$ ©y(z©Ujà’Ú1A DpTIÄQï|C€­o»TJ°Ãw£_ÁgÏ¥§¶„÷Ä‚ˆÉÂÈLn°Ó‰
+Õ{õo0¾iü>µFá
+Ù¥”ÒãÑ”nK›©7²sê­D&n#È8*Ø1šÖw÷
+w€tNh»»¥¾Ýø]øÌÆKî>[ ÃÔž§~XH?žúQa
+xDÇ•í¸S7î@¸^[ç»`{^`ìyÄ÷ˆïßÓÆÄ÷Pìâ-ý	gE‘nŒ¯û¶êœO¥€Ç;HóZ7ùÕ|¡§Þ¸„˜_˜ßj49œµ ÌO`PP#•úa!}SêG…µIW¶+JÝ¸a~4Aé€ù3ßó=á§$æg ¸%æ×G#óÃ±‹å-½¥xZïùuß Iù©¢ð¸ðÒ@ãZ7ùU· ²Ô[Póëó›/—Ë	g/»
+e~ƒ‚Z\ÔéhQ?*¬…è¸²ý*êÆ
+ók¿UÌor?v…“õ”ÄüL ·Äüzhb~(v‰zxìR3­wÈüºou§ÎüTQ
+x\ø"àÆµn:ó«n&h©7$æ×æ7¹Nf·i.B(óÂü†0?QAÌOx\IæW;î@˜_	»`~–ì
+'ë)‰ù n‰ùõÑÄüp˜ßÄ|6°g¦õ™_÷MKÕ™Ÿ*Jvæµn:ó«nk©·…%æ×æç,«•ËŽÐ	”ù	
+ÚçW?,dŸ_ý¨°}~¢ãÊîó«w(Ì¯ý³Ýìósƒ¹ðSó3 Üóë£ˆù¡ØÅ[ø~`‹§õ.÷ùuÞ~aŸŸ"Jßç×¸ÖMg~Õ
+¾-õßÄüzÀü‚éÜu8êB™ŸÀ  †ãõÃBú‹×
+k'.:®l÷ðºqÂü:hÞÅw~~àpJà¬§$æg ¸%æ×G#óÃ±‹çÏ=v©‹™Ö;d~Ý$ ÎüTQ
+x\¸ƒ4®uS™_õþ>ø¶¾y;DÏ(Ú”7nâÞë‚¨“ØÀ ú$64„B‰KP2cË&)‘±B§:8aW C»jx$j-EbbÈ[Ž!1ÏCˆ2ÁÀ¢ ¿³€Î©õt}U7¢éŽ\¿¾Ñ©ï7æ¢~¤V-1oäü§¯ÔÕGp­§c‘ÑÔuÕ”þ‚.Ó'U'ÒêHò¬Î<ÊØZÁ"DVô„Në±ÕOë¡%*ñõ¼Ä×É™8º }óƒžŠ|Száä‰|P™O_ï7eÊŒóS¡ÏÔBzÔ×¨Ô‡jl*ö™:ý¨º‘f§™‘ouÎæûWîCõqµ‚_õ!m¶ú!mTð£A¿žü:9
+M¼o~ÐSÁaR/8”*øéëý¦Lyƒq~*ø™ZðCÏúzüPM?S§åLzbI¾Õ9›ï_ÁÕÇÕ
+~5{wÕÏæ¤‚¥*øõ½à×Å	˜ºà}óƒž
+~“záœ¹|PÁO_ï7eÊŒóSÁÏÔ‚zÔ×¨à‡jl*ø™:ý(×õ:»˜|«s6ß¿‚ª«üªd¶Õd¦‚¥*øõ¼à×ÉÁÇºà}óƒž
+~(]:rÇ‹æc€
+~úz¿)SÞ`œŸ
+~¦üÐs ¾^@?TcSÁÏÔéGÕ4;²ž|«s6ß¿‚ª«ü&b¿ôdt*øQÁOÃA?Æë}?ï^¼o~ÐSÁ£YþTé|PÁO_ï7eÊŒóSÁÏÔ‚zÔ×¨à‡jl*ø™:ý(÷ð›xŸ]7fq*øõÐ·ú^ðCõqµ‚Ÿ+Vðs©àG?}Sü¯·Xð<ßá|ƒÁ:îœ
+~z=ü&õ`:w6ÿq©à§±÷›2å
+Æù©àgjÁ=êëTðC56üL~”Ýh¹ZpŠ²¸üzè[}/ø¡ú¸LÁÏ[Ÿ~û~w¾”ª|Ñwñ+ÀÂÞtÔNa/™•gòkƒ=,ðŒâŸ‚_™V®ä A®ÛÅª”8ÆÌ‰mC.A3ÈV S¢ª.Œ§Ô­Ð{öÚÇçõÓQr”·™0`k× Zšc)oŽ,õDåª
+6?8 Ö€rCõèè§*ThØª„ îäûõ1y§ß­§¡Mœ 8Æ¹Â	„÷„[Ž¸ìEÃ»€á¶;	æìm^Ä;ì1(Þ–2Æq•© ÇËGV—à8ø¸j‚ãC‚ãÂ'Ø'8ÞG8îZ–cÙœ  8ÞÁy
+ŽíÚŽ¸AŽoáÀñ¶”98Ž«L8^>P²ÇÁ‡I>_†à8Áñ>ÂqÇwÇ»É¾ÍÊéÇ6ÈÔ[¶È1.ÇûbáÀñ¶”98Ž«L8^>î©ÇÁG=îþNpœàxá¸Øã	ûO‡•Ó	Ž7lIàÌ§qƒ7ÞÃãm)spW™
+p¼|C	Žƒb 8>$8.Ü›•à8Áñ>Âqk4™¹SN ï`íøxæÌ—â!8n¼=†ÇÛRæ à8®2àx¹Ur	ŽƒÛ$îœFpœàxáø|êLG¼  8Þ>÷mw5b×¼˜!8n¼=†ÇÛRæ à8®2eàx¿ŸÞâÃPBãéëwé X<E&`ñ IRV‘t„Â•º¿öJ&O•Ù,Y•ÞyƒÖ¨ªµ‚­˜êÁcV6CEiüÍi†ª4öCÉ/zÉÕ|7úeR„ìµkãÖñÜ4ú¦³ÝvÏûèÕ.¬~½Çl7¯\40BåÃ‡Zè6ŸKëšuÂC;êmp©OéÅœ^;nŒ0.ãÜÓmÛAýIJƒHžxÅ&þœ]àùJbåqô+x£€ºÒaá
+®sx!I_¤@¸¸-‹ÄK½±%10X¡#enP&0,€…	ŒJ<LgæVÀÞßJLŒ˜XO™˜µrVSv§âbª\¬ ÜÂ”^n–µ``âc:Y‘-g«•/r¯Ýs²Åtx¾ð­+“geåÆ¦<VïoJ¬ÌV&0(„•É¢P´Q‰•iÌÊ‚™ïù¼.¸åÌN¬ŒXYXÙtj­,öfÿDbeéµ ÜB`¥—›ee-˜X™NÖ@ceþd9[²7²&Ä.Y™,¦ö"lÖ­+“geåþ¶<VosK¬™•zWå& ÊÊ
+ýisƒÚ¬Ô‹6,€•	ŒJ¬LgV6	y»Þ–o(Ø;V&»ÄÊzÊÊ&þtb³Ïd¶Ñ$V&‘^Ê-L	éåfYY&V¦“5ÐX™çúöR¤Ãn÷¬låyÞBüV«Y™:ƒ)·æ1xg`b0ÈF ¿Ë3ha0²ˆ
+mTb0:3Ëvm*¿ä¡wF–ÑƒéƒqVöÒåuMÇTÃe0å¦„ôr³¦ƒÑÉhfµZ<öùf¬	±K³–cMY·Jß+É³²rgh+ƒ7ˆ&V†ÌÊ
+]ßree…ÎÎ¹A'¬Ô‹6,dVý¨ÄÊ4fe¾¸{Ê·âì+ˆ]be=eeÖÔ]LÙYfZbeéµ ÜÂ”^nxVó&V¦“5ðö`¹žç³7%³&ÄN÷`M¼‰Ï&»¬[%V&ÏÊÊ
+Ây¬Þ'œX2+à$ò¬L .BX™,
+E•X™Æ¬,ðÇgO˜ùoÐzÇÊd«ÄÊúÃÊ–îÄ±¡³1±2‰ôZPnaJH/7ËÊZ00±2¬ÆÊ‚¥ç,Ù1Xb—¬,X®œsÒY·J¬L„•E'2ñ©Xü*”~¥;»‰~õú€¦Ö›~7:ñTßdu‚Þæ¾½°ÙÓ	sKïjÕ0V.ÜPñ”vßîF9s•_ëšDfE ƒ5œ³mV£èW0SÙøÛÈ,`
+DoÔ®ºQ(&¨o`œ=ËÞ½˜@Â0@Bûi	&L ˜@0AÚ¢žíœŽ ºoéO‚±ø­6	*ºjf¡¼¥&A…A@…Ú$T ¨@P ‚ü¯AØ_I°rU—P!°¼¥·¿Õ&¡BE«·,T€÷y#¨0¨Ð~ï®¡A…0bü™Ä¾ÏÆ¡Bá†rP¡´5™ A] ‚ëûÞD8Wu	üE0öØŒy«MB…ŠžJY¨ o¨DPaP¡ý&9Cƒ
+S¾r$šÜ5
+7”ƒ
+¥>Œ*h¼À›qvÊ±rU§PaâœýÌ[m*T4úÈBx—‚
+ƒ€
+tnT¬©=bŸRÂ\!ß8T(ÜPõ&‚
+t
+VDÖ…sU§k¾Øâ·Ú$T¨Ø}ž…
+ð­ç:ØN<4¨`;3oÁ®›2[œ4
+7”ƒ
+¥.<*hÏw8­FY¹ªÓµ
+ž?ç4peÞ*:TøÇi÷Ä‡ñ«Pd`2¨jJÓ\÷”‡¢¨~B•½C @R5¹‰¯HŒï°	]nŠ—=Ÿ¸ù†ÂZP'ïQÈ´”ŸxïM¡Ï£¢5~˜¢_AÿôR@ˆ7
+…õ›!£w©o†$l@Ø Il ¶]¨;t°œ­V>»IMoñAóÏ¬B°ÝI0qÌ>`„
+%,¦ËŒ{a—8õV‘BÅ^È,R€ï…$¤@H¡I¤ ¶[¨;¤àO–³åTø¾{šfÂÜ±]›
+‹˜[WF
+-<,Þ±ÑÁbº`/°fya—HõV‘BÅVÈ,R€o…$¤@H¡I¤ ¶Y¨;¤Ðü1÷ú!…æŸY#¤0uç–-ò°}@
+-<,Þñ¬žç-Ä½°K¤€z«ŠH¡b'd)ÀwBR ¤Ð(RPÚ+ÔRhþ8iýBóÏ¬R˜Î|ÊÞÂìqa4RháañŽlütt=rWD
+!³H¾’!…&‘‚ÚV¡îBóGœê‡šf‚=ž9sö×bÌÍ(F#…oBã'öêy¸°"R¨Ø™E
+ð}„)4‰Ôv
+u‡š?vO?¤Ðü3k„|Û]Ét¸0)´ð°ˆ^6}Š¤ž^¾#…ô_ç¿ý?PK    Ö½:]`y‚Ó95  s¯    word/stylesWithEffects.xmlí}]—£F²íûùµêÅOž– !ÉË}ÎÆ^Ëãñ™öø>««Ô]š®’êJ*·í_@Ÿ€ÈHÈ„í~˜)@¹3sÇˆøþþxy¾û}¹Ý­6ë÷ßÿ6øæn¹~Ø<®ÖŸßóï_ão'ßÜíö‹õãây³^¾ÿæÏåî›ÿùïÿúþëw»ýŸÏËÝ]òûõî»¯¯ïïŸöû×ïÞ½Û=<-_»¿½¬¶›ÝæÓþo›—w›OŸVËw_7ÛÇwÎ`88ü¿×íæa¹Û%Ææ‹õï‹Ýý©¹—
+_k/‹‡óÿuƒIò÷j}iãöŽ6¯ËuròÓfû²Ø'n?'¿Ø~y{ý6ióu±_}\=¯ö¦mù—f~ÿ¶]wjãÛË}¤¿ù.¹ï~y>_¼©ºöx£§ÿ9ÿbËs“ÇŸ„›‡·—åz¸½wÛåsrÃ›õîiõzí7ÙÖ’“OçF*8ó°__‡žÚ ‡ÛÅ×ä®
+òÜþãñG/ÏÇ;¯nq8à‘´‰Ë/xn!oó|'Yð}•ëšlç~VëÛ¿o7o¯×ÖVj­ý¸þri+YDÚ:QöÑvj7óáiñšL —‡ï~ü¼ÞlŸ“;Jzü.Eäýÿ×Ý]²<=nÂå§ÅÛó~—9Ûþ²=;:<ÿuü;Þ¬÷»»¯ß-v«Õ¯Éý%­¿¬C?ÌÖ»Õ}rf¹Øíg»Õ"{2:KÏ?¥2ù°Ûg«ÇÕý»œõÝ_ÉU¿/žßß;ÎÍ©ù®ôäóbýù|r¹þöß²÷™9ô11ùþ~±ýöÃìÚÂ÷ï2Ýpú#×Q‰WVß½ún÷ºxXndñi¿LÖ¶døS«Ï«4ÎØ?ÿñ¯·tÌoûMþ.^³w‘7™)êá¹÷É"öá¸%,?ý´yø²|ü°ON¼¿?XOþûÇ_¶«Í6YÜßßO§§ƒ–/«VËõûûáùÂõÓêqùÿž–ëï–×ãÿæÿ©Å‡ÍÛz| K=ï£?–¯é¢œ\²^¤Ãüsú«çô'»Œ±Co«ë-Lþÿ³Ýá¹£ÊL=-é®}7¬µ6%´æ0oÇ%jÇ#jgDÔŽOÔÎ˜¨	Q;SÅvö›‡#R³m¸SžŸÝ@Žïg7ãûÙ
+ ø~vƒ¾ŸÝÀ…ïg7èàûÙ
+ø~v3öõ?{Xþ¾ùáH5¿®öÏËÚõmH±œžö™»_ÛÅçíâõé.å7¦êšùðöqÏwÓC‚›þ°ßnRö[cËqlE/¯O‹ÝjWob8~MYÞÝß·«ÇZ{£’ý­ÆÂ/Ï‹‡åÓæùq¹½ûuùÇ^ª‘Ÿ7wŽ¨~À	zå§Õç§ý]Â‡y,ú%Áeä§Õn_o¡ä¡¸,p
+®_ÝÿX>®Þ^Î=ÅÁ‘|—ÂŽSoÇS±“
+ÏÃŒ”p<‰¯b$|ž'+áx’‰²·ÞˆÜ*.¶_øæâXn¶Ï7Ï›í§·gîUe,7ç/vøFnÚ_Œp­-c¹9Ÿ[„ïf‰CÊeÕÕXÀ”ê²,`Šf}0H³P$X±¬É-ÝÿZþ¾Ú	·ø¸ï2¼·öÝ’b2ÿû¶Ù×“d‡Bºøq½_®wË;>“.{Íí¤ƒO°¥
+X#Ø[¬l²Öw[~KDÛ®€A‚ýWÀÁF,`pGæà}T;2‡)ª™ÃíŽÌavGnÆ‡°FàL	X#Ü8¬nÍøYÖˆ¶€zKÄ[ ‡AÂ-€ÃáÀapàðÊ©¶ ST[ ‡)Ú-€Ã íÀapà°F¸pX#Ü8¬nÖ· ýš¿%â-€Ã áÀapà°F¸xÍm¦¨¶ S´[ ‡AÚ-€Ã áÀapà°F¸pX#Ü8¬nÖˆ¶€zKÄ[ ‡AÂ-€ÃáÀap5·p˜¢Ú8LÑni· ƒ„[ ‡5Â-€ÃáÀapà°F¸pX#Úê-o	· k„[ ‡5Â-Àonà0Eµp˜¢Ý8Òn	· k„[ ‡5Â-€ÃáÀapà°F´Ô["Þ8nÖ· kr«IúöóòŽû…å!å[&ü¯I“¼ ~|Ô-?-·ËõÇë-VÏÏ*`–â
+ô`³ùrÇ÷I€[‚1{«Ï«Íá¥¨?oŒkß`ÿçüî‡ååÊÂ÷ŒI?xË~Þv8vúî:¹|ÿçkÒêkö5­Çã7§wËþøxùír{éýÜ¾<»Þûé.®¶»dŠž®â¹?uãë
+ŒÔßÙå^N=0dßÍõ¶«ý‹d¬þ¹.½áõò}éÉçÕúËùäÙôüi±Í\rˆó…S¹î8œÎ|™üõe¹|ý9¹¿w…c?­ÖË]öàõÃÉËO›mÒ}Þä€ÎÓw”—5îpõæmŸ~DùÓïÏ—;¹ÜBî#ÊÜ×­ß—}ÛºøOÅ·­éÉÒo[s¿¼~ÛšÎÛšŽcîyîñÒýàü,®?Š§Ú;ìïï‡Mâz8ÝÓ9çŒd>ŸNd>žd{ëÔC
+`vªÁìh³#æüúg ÈOŸs‚|Ø!{ñd„e /´_iŸÒn5¤]vûi§o¦§W
+OO#<=!x^Iig ëÚ
+ÙUî3à<ª†óH#œG}‡³g>œs°t<7>ŠÓìxÓÕ¯ª¯¨~ß:2¨Ükk« Wƒx¬Äã¾ƒØïˆ½Aú¯â}ÒWÿºJóDÄžT#x¢Á“¾#xl>‚Õ…†AáDFhÐByZ
+å©F(Oûå‰ùPÖºkEýC®ÅC2™SŽ©Ë§ö‡SÌùP’ª
+¼CqðV?Ñ>MÁTñ4‡Mõ±¦»ÃuÕóNvâí?>ç ›üýã:y_OÁ¾ã“<þ±È
+urÙ|ùüüE>›å~óZýÓãÊ²ü´?^6Lª.ü¸Ùï7/-noöÔ4™ŽUñ¾OÇxà¹~{ù¸Üžb‘¥qÃCn–’±<&n¡F™­äçÍ9çVÙ­žÏóÎµü&êa´O9P½Ë·9P3ë°Àâòð¶KpuˆG0òdvÎçˆë]a7,ì¶Ì¥ªr{ro­5kÎnduS3N=frÌ8=ÆLûAA„¸õqÉâ!ÕQtËŽ¯S1õxJƒ?vh¸ÖfßóSÛ _ƒÇ<Ó»P³ÃïÓó§wÊþJ½¤»ã–ž¾”sÎc¿óÎ×wy{,~àxÂ	ëÔ±y[<Ÿxñn\ÆÃq²=Þt\úDNÝÖxé¸¼"~r‘·,Þìœ—Ÿ8¥æÈÑ¶`^^>±èVÊâ<­™JÖ¬“{¾äf"ærVÃj|n»~A¦ó˜o´PIbõÌxïëØ•™‹Í]ñh_3`w8*§ã•ÂÓñ´­q9ØT‚–n¥cLƒ˜Z³Øu?ìå-ÕŽ®F™p)d!å_én!àzd+Õê '¦š_úñË °AÕò2™¾
+6Ò3»)={ÌWÏßCÙ9tn½>ÂóÚe¾/g³a8	ùu²¡Ãzf}Ê=guOÒ-P—¡ãîØòTNÉê×'yGõ€ï¡7Ÿ‹uú~¢!¡5ßuM°áL?ÂJ^¿>´È+ã¬'äx-¼­ŠA®»é°\¢ê“èò½V74ôx¬‘éøðØ`¿–³”rr¢DIèÁše&îñåº§ÅúsZÈõðwL%í•’­æTD¤á.s?ž¸ºlì´Öe%kç¡ËD–Í¦»l8˜´ÖgÁÛóó²brÞ.0«÷nuŽäÈ—ß—ÍtgÕÜ=^aÜ®éQ§å­šÚ§5m†×ô¨ÛZþ|xe¥¢COXÕ£–»³jÊ¯h~Ê;Sß–šõ[îÑª)êÑÆ§¼ZŽ[ëÑyÒôjýV9téå³º´ÊudÒõ†xÓ¹»ªæýùãf¾P§6¤Îf;µjê_:Õ´É/Ô©Êß@¯þcñ°Ý”‹Þ/éé	âòS‚QM_îw¹u49pþqÚé3¾nvÉ¶?ÎlS•W‡Ùpsõ¥ãlÈºòRÇx¼—N²C^y©ëxËKxS~[¹öHT7Í%ö¶]±C´íz$¯]\}¯ùWryT2A}¸„8 qG’zÜ
+àMöZr¬óÇìòã)þõ˜û%ŠCÃµ£’i*?ÜñâÁá?ö‡2ºÀíòQ Ã|qPkú½;ÝœËPÂìéó{¹ù{¹^õ“9ËúÄš×2>æþ0"³ˆ :Fõè‘£cÔt4šã@pÜýúq÷ÉÇÝïÇ¸“÷BãzLŒÉ11&šK#!ˆI= &ä€˜ô†eeDÆ´SrdLû{“°îùâùš–‡ÓI"§›ñ²ï¨z²v\eT±½X¬r2”W‘aùGÅCÅŠ¯ßì·›²¯ñOçdW	†3ŸR¨‰(%¯Ø—
+ Ìþ¸œ%ì•/%¹ôÅâT/ B˜;WÐ&Ðeo¡V§s[úôÔÓøé);e3)ýLÝC…ŽCv’ã_Ê«™á’É
+Hê±JÇr“„ë1C“û¸ìyY½«¼Ð­§ÃdúÉ`rz»²Žê©ÊE´W÷òMYÂmKå{R«}­›S…ìëUt}îÒõù.ÙlŸê_Þ¡óÁhà•thþ“ê·Â~H
+ðšÞ¾-fDØÝÚ¹*ùPT~.¯gœÒºNyH2eŸGÆmodÊºX5•Ë?ççzSÌ~Ì¤*íHF2/Q¼,š·é.§Ù~åz7é’ñðÚ§é‘´h]I—¦§EíÊ{4›&±ªßFAjúüs‡†äÓ)›íãr[xêN±ÆÍdÜœ|â›#A>&[Tk„×åªiæœ¦Q­•Õ:ÚåDíü¦ÒÎ)}daì¾ïe~ÌÛ©¨·{*ÇYöžg¦Ô°úàøuš€üÆÆý‚ËùàMžÌŽV¶Àñm¾‹õã‡Õ_—Î—˜Ã…‰ÙÚu,Y“’	ÅñÚÇ"¤Ôz¿fq
+¿l/­|ZmwûF÷™ÈL’Â49‹aùìÙ|s¦0kŠó¦@	oIá»â4;<[œ…æö7`Õ
+×›­w½z¾9¯
+Ð¼”Þ@a'-¿ä·’KÀ*víñà/yìÐVÀçðüµ‡¿Ã˜<Ð=,ÄPß¸Ñ	þ¶ÜîïIP\´–€p\2ž.,ðáy¹Ø¹|òç§ÕóAàIÿ]æÙYzì(!»qaÇ•ÀÛa~ØlÿÂ èßåÛÙIÁ®÷aîŽ—V•ãî†3#™¯½óîg YzÿdÃ¥KC
+Ym¤Rì,£•pk€Á¶1×¦×¬:tÃ8Š
+¬ºÈÕàÜX<îMi~†{S‘æ¤îÍÔs}×+{Û£¿î
+ç[0Ò»0ï[6poàÞPCVµ»Ë¨%Ü`°mÂ½é5¯Žâ„Y_YY–WçÂ½±tÜ›ÒLƒ÷¦"á`7Ü›±?uÜ9{7p{ìÞLƒ MËúEÝ½álî
+ÜrÈj£–bw`µ„{¶A¸7ýæÕ~…#&¯vsGáÞX:î'àÞd3vÒ½ÅÞt<cï× NÿÜ›ÉÀ÷fNY¿¨»7œíÃ½{CYmÔRì,£–po€Á¶1÷¦×¼:ŒÃI4aòj/wî¥Ã@àÞŒÜ›l6ÓNº7îpâMönpuPûçÞxÁl>÷ËúEÝ½álî
+ÜrÈj£–bw`µ„{¶A¸7ýæÕN4‹óŸwÜr5¸7{ã¸7Ù
+Qto"×ŸJ¢7×M¢îM<žú^É.Y,"+³s¶÷î
+9dµQK±;°ŒZÂ½ÛÆ Ü›^óê8Œ¼°˜°«ÈÕàÞX<RîÍO«Ý¾Ê§9œW÷c²iÖŒIøn·—ÁŸ¹<³¼Á¹žo§4I÷Õ5º•âÃÅQþ¸xøòy»yK¶{6‡àÜ‚¸—óÚ²i0•·Ïž;
+›·×éî«­%z×AÝ+¡Öµn†!nFc)Æ}MØ'vx [ !ízñd¬N¯£LW
+_,{YãÉ¤Å'ž!©ªe'2aÃ'kÒ'+à-Ÿ½^Y^™|–h9 Î2M½èÂ;³Ò;Ã0t´í¥-CÕ[«LÀõÖ(²o—{kó`àûÙðÖèsc‹O?C2oËN=$ö†·Ö¤·VÀ[>)¼µ&¼5ù¤×:RZ7œ4›zÑ…·f¥·†9`èhÛ[0Z†ª·V™O<ë­Q$‡·–½¬ñTßâÓÏDâ²SyÊá­5é­ð–Ï­
+o­	oM>‡·ŽÝ
+ç §^tá­Yé­a:ÚöÖ Œ–¡ê­U¦GÏzk¹Ñá­e/k<s¹øô3$/ºìÔCÚuxkMzk¼åSÅÂ[kÂ[“OI®#áxÃ)Í©]xkVzk˜†Î¶½5 £e`¨zk•ÙÞ³ÞEªwxkÙËOÄ.ñ"²iÞe§²ÈÃ[kô»µ<Þò™oá­5á­ÉgX×‘?½áíÔ‹.¼5+½5ÌCç@ÛÞ€Ñ20T½µÊäõYo"s=¼µìeç•Ÿ~†d­—zHŠo­Io­€·|"_xkMxkò	ãu¤ƒo8á<õ¢oÍJo
+sÀÐ9Ð¶·`´)oíïÛÕc•—v8¯îœe“À9C:þ–Óñ/TçÐÓüoš‡KižK¹7ëý.m{÷°ZýšÞûû—Å6Ûf	ÒÆ—	]œíV‹ìÉèt,=ÿ”^ÈüåÃnŸ9¬WÅ!iÜaêR~è¡Ù	¢Y‹G)¡ö“T[¡5ômâ¢Êæ­F•ÅŽéDªñØñÈØúí[Aèõ!é î„ÂHóAúïb)[@,{ÌØ¢œÀ]»T¦Ažb° À&ßÂ¥•|žêNéu”Õ íg/Cu'Cª;±¼o]—Ô§Ê-|ùm÷õí)0R*õ›SaD«lØNþ-NaPÃ†ôétÀÆµ¤S!  C30ÄÓÐ
+ã(ºØÊ×­ÍíN0 ÔBså0V€¼ÍÀ @n?Èu‡*KŠfC%E"È^†’¢†”eùéº.(Šš[ø"°]°§ª]iˆÀœ²vZÆvª."DÐâFÕ^Ì`„" °q-éTˆ ÀÐ1õ4ŠC7dtÉíNˆ ÔBså0V€¼Í@n?Èu‡*ëØgCuì"È^†:ö†Ô±gùéº.œ"@ˆÀMÀžRÊ¥!sj)kÛ)õA‹S˜/D`ÏÆna#D`ñ#ƒØ»–t*D `h† zêGQ8ºØÊª§nîhwB@ šÓ(‡±äm† rûA®;Dàñ†²ú=BÆ„ø‹½ËÌp‘Öeæ·Hû³[¤y©¸ÁÅƒÓ BØ¡	pÏÝ+VíšU"3¡sÙÒ*0ò¯mtd
+ó…ì™Â˜Á-Ì`„,~dÐ{×’N… ÍÀSOÃ8œD“‹­¬zêåŽv'D j¡9r+@Þfˆ  ·äºC#ÞÁ!C^0›ÏKjV
+~‚D*1Ö¥‰	´/“FL y¹ZÂD³”ñ@ˆ !;4î£{Åª]³Êk™Ð¹liù×6„:2…9kX3…1ƒ[˜ÁXüÈ ö®%
+ š!¨ž:Ñ,Î'd¿šÊíNˆ ÔBså0V€¼ÕZ ¹õ ×"ðyC>B&†âñÔ÷JÐåüñ.ÒºÌüi_bv‹4/"7 ¸xp@ˆ !;4î£{Åª]³JCb&t.[ZFþµ
+!‚ŽLa¾=S3¸…ŒÅ:`ïZÒ©€¡bêiF^8¸ØÊª§~îhwB@ šÓ(‡±äm† rûAN"øÇòqõöòáiñ˜Üü8^swºèî"+²• ù~`þ+âj¿ü#S~ý¸–qÁaˆÊ“
+
+Ê›“‰Ê[“ûö@ÊÂ æ…*<ïÃÃ€ŸÁþ+ûÇÅÃ—ÏÛÍ[Â‡ó–Û{³Or:4¼´4¾¸4½¼HÊ‡…K¨óàð_:ï_™#0U”ÇŒìüŒÔ)È·"‰Ó•T-¹—¹ù ýÇ\æ²ÇŒÁLØ*ZéCB¥É­æÄŸ^öãtæÏ¯üÁ«7Ò«³Á¼¤r¥¿^ÉœÌV¯dPb«W²'åÝËZ„ÿ¾ÿ^~J4¾È´°Ì4¿ÐCÞ¼x2®
+‘ÁÓoÆÓÇÜìÍÜ„ÇßºÇºaE%^ö(|~óz^ÚÃŽ˜×ŸýH^¿1^ÿ<ã’bTNå%µé+™“Ùò•JløJö¤¼~Y‹ðúáõ7âõËO‰Æ™–™æcèÛ|0xl¯ßQgjðú9¼~ÌÍÞÌMxý­{ýQœx¬NÉ‚—=
+¯ß¼^„×Ÿö°+æõg=vxýÆxý;ŸOJêK¸•”Ô¦¯dNfËW2(±á+Ù“òúe-Âë‡×ßˆ×/?%_dZXfš_hŒ¡oÓ FWç(Kß\u¦¯ŸÃëÇÜìÍÜ„×ß¾×ïGQ8*Yð²Gáõ›×‹ðúÓöÄ¼þ¬K¯ß¯OfA‰,íUnPR›¾’9™-_É Ä†¯dOÊë—µ¯^#^¿ü”h|‘ia™i~¡1†¾*çKiÃëoÂëÇÜìÍÜ„×ßº×Æá$š”,xÙ£ðúÍëExýÇ2BB^ÿ¥ê¼~“¼þñd>=ö5ªÜ ¤6}%sRõ©”ù¤OÅžÜwý’áõÃëoÄë—Ÿ/2-,3Í/4ÆÐ·B‘Â|uLxýMxý˜›½™›ðúÛ÷ú­¯ymÂ¶aQe‹½þ’Ò½e^?E_xýÙËh
+øNƒÁ¸dƒò+7(©M_ÉœT}ƒ2å:TìÉ–´¯^#^¿ü”h|‘ia™i~¡1†¾êå^ÁëoÂëÇÜìÍÜ„×ßº×oK#¶
+ëë$Zèõóeñ£HÞ—õâáä9ùÃ²
+)OWjwRÎvàAÂƒ$õ ¹ñ{C>YK(Â ªY­Q­ˆç |ûãÖ|)€”ƒ»åWœ#HKœÜIÖHW.~ Tbz?Î’Þ§û;œ¤ÿ*Öëì™Ô\¦¿iM¶0þ¹ÖËÔÁ h´^ásýµ8V•L´}ž ( @MªpéPV¸„\–½rä2Èeý\áÅ`J	B0³¦Ì ˜Ù¹üu RpôŽ4D3sÄ%ˆfõ ™†h%šq¾ZFY ¢Yö2ˆfÍ šõs…c€=ªÄ	ÑÌ^˜B4ƒhfçò×HuBÂÑ;ÒÍÌ— šÕd¢P`”hÆW_Ù¡¬¯Ñ,{D3ˆfÍú¹Â‹1À²…hf/L!šA4³sùë ¤:!áèiˆfæˆKÍê2
+Ñ(0J4ã+OîP–'‡h–½¢D3ˆfý\áÅ`ê@C4³¦Í šÙ¹üu RpôŽ4D3sÄ%ˆfõ ™†h%šÄD³K½^ˆfÍ š1 	Ñ+¼fÛ£2êÍì…)D3ˆfv.€T'$½#
+ÑÌq	¢Y=À@¦!šF‰f¾˜hv)w
+Ñ¢D34!ša…×¤FŒ§¾Çö%üÌ!š‰â¢L!šA4³rùë ¤:!áèiˆfæˆKÍê2
+Ñ(hW4ûiµ«)™™^AR&3ûZZ;êX²9ðªZŸÀŸ+k½ÍZ[Ú9ú€c2)µ]®L—+.ÝÛx³ÞïÒ9±{X­~M»ôýýËâ?›í³dqIoi™0ÿÙnµÈžŒNÇÒóOé…Ì_>ìö™ÃÁêqÕŠŸ¨
+fÄ-CaRr±†±7‡¬gpÞƒ{ÙªQT_òÛCCî9@@IZ «yú¯à·){ì×ÕzÿþÞÍwDµ=Ÿå*äµ”uàApšFpu8O}pSˆSzÁâl$$· æ*2î~¶l$Au„Fènè†q1^¶^¤Ny«¹æ)/EWPÞÂ…¦QÞB­Ü²âP^ÎöAyAy(¯"ÓáîgËF”@h„òFqÂÙÙÄòGí¡¼IòV—aËS^Šl ¼…M£¼…¹eÅ% ¼œíƒò‚ò64P^E¦ÃÝÏ–$(/€Ðåõ£(1ù¡k+åÕ÷Hê”·ºˆJžòRTPå-\hå-d°Î-+åål””· ò*2î~¶l$Ay„f^lˆÃITüþòüPvR^¤Ny«S ç)/EþsPÞÂ…¦QÞBþÉÜ²2" ¼œíƒò‚ò64P^E¦ÃÝÏ–$(/€Ðåu¢YœÅõúP–R^}¤Ny«˜æ)/EöRPÞÂ…¦QÞBö¨Ü²âP^ÎöAyAy(¯"ÓáîgËF”@h„òÆaä…Åäç‡²“òj|$yÊËñÙÅ×j¾a·=~ v­ý,›jÐšÌj9JŒ´mm¹»¿ÎÝï_ÌÙý5ß±N6HæU’h:ž<ojjNaýyà®JƒlQdÀÄcmévRÿ2ÏkGVýs†GÙÈëNï‡i^:äÈÑÛë¶äD$QH1¥Ùé)Uíy'qûâ ’RËtþÌ™eæL3fH²vŠ³Cr‚Ê’j¤…@Ã‰ÐRF,¹¡”²ëØA¤H£Xýu³e•Ô´˜ê¥ƒ¡†ñº¬5Ù|;-Õ´0k8 Ô’XÃóòeÎgˆ5kHòM‹sC²YË’k$Ë†XÃ‰ÐR±F,-¯´²ëbØA¬X£Xýu³Å•¤ê˜ê¥ƒ±†‘ÁÒš<ôkZˆ5jI¬á¨VàPV+€X±†¤R‚8×1¤ƒ,¹F™ˆ5œ-kÄÊ[A+».Öˆ
+Äˆ5Z€ÕQ7[¬Q)‚©^:èk*5Tº-Ö4?k8 Ô’XÃQgÇ¡¬³±b
+Iq®cH!YrEk8Z*Öˆ•B±‚Vv]¬2ˆ5k´ «£n¶X£RÈ
+S½tÐ!Ö0¾¿±¦öW§Åš†b
+„Zk8*Ä9”â Ö@¬!©N'ñÉ·µïdÉ5JëA¬áDhyÎ¡"^VÐÊ®‹5bC±b`õcÔÍkTJ0bª—:Ä†J`MÕÊn‹5ÍÄµ$ÖpÔ6u(k›B¬XCRWUœëRµU–\£(,ÄN„–Š5bå'­ •]kÄ†b
+Ä-ÀêÇ¨›-Ö¨ÆT/tˆ5Œ^·¦Þr§Åš†b
+„kþ¾]=VWJ¯ )þ4n]›éœ¢á
+ÒlUç|ð8wƒ80©`Ž¼1©—SäÍÉÄå­Vò†ìýÖ„½>ª=ùµGs]ÅÂª.­6},ôÜ|ÇV•”t	Y£ºD!ùì’ÙxE|üf†­q£’>÷äšÒœ“kÜž·Ðþ)°@®š G6HY´0{	-³Á¼´T91T2'C
+•JC%{RôÀ¢ A”µŠ¨¿žHb?d$QaŽ&Igã ù'˜
+DQã#©SÅêŠdyªHQ‘T1{M¯xŒKr:Õ‹ T]sR•¾TÊ”jQ±'E	,
+REY‹ Šú«I€*fðCFæ¨¢‘T1Œgã™Ï=Ál ŠI*V×CÉSEŠz( ŠÙËH¨bàÎç“’ÌKnõ"(C•ÌÉPE%ƒTQÉžU$°(He-‚*êÏe
+ª˜ÁUT˜c ŠFRÅy†³9÷³*j|$uªX=O)²±ƒ*f/£)8OfA‰¿ìU/‚R\TÌI•¤S1(SSHÅžU$°(He-‚*êÏ¤	ª˜ÁUT˜c ŠFRÅ †%Ô°&˜
+TQã#©SÅê\°yªH‘T1{Í»Š“ù ôØ‹à¨z”zWQÅœÔ»Š*eÞUT±'÷®¢ºEÑw%-‚*êÏãª˜ÁÝ»ŠòsTÑHª8…£ˆý†k‚Ù@5>’:U¬ÎD—§Š™è@³—Ñäo›ƒqÉ"èW/‚RùPTÌIexS1(“¢GÅžU$°(He-‚*êÏ"ª˜ÁUT˜c ŠFRÅ8˜Ïfl^Åš`6PE$O9>g¡øŠeÒ:3DŽbc9.Gœš'´ümË°WþÖ%¨*ãR¼T´yAÊÕ<gríH-jrŒQäÑägo
+§êäA=7Ø…â¤ÛQ[@nn$QVÀ™¢‹aÐHÜÜ_¤ð¸…7Æk®þâ)€§}ðÌÿñrWKÈuV
+ËJîìŸ•\Ñ  ?KR*+è2ü™éÊÌtj Ô”'Ô'Ã 4{”ªT#ÒºTreöe²)4/—>YØ€h¾d>m:‘ýÎHÙ&Œ˜ý±„7ú<*7B@ë±ï
+áà‘¯D£’7Ìm•nìÉ?J*Þp“qyù†Ÿï«³…Qì„ÃóŠ
+eÆXH8pÊó˜F¯dQq
+ŒA"Õ­@ëR™mÚ—Id+Ð¼\ÞZa¢ijù@ÂéDVZ%œx…QÈÝ_p á\†ÞpÇ	§ïàqÂ øù€Ž=yÁI%n2./áðó}m±ùQì„Ã‘ÉÝ¡Ìä	NyÒÈ F%)ôÜcÈ+*ÐºTQöe²†
+4/—$TØ€hNP>p:‘-ÞH	gOJÞZbõ$H8—¡7Ü1‡„¤@Âé9xÒ,!;DÁäH8öÔë •p¸É¸¼„ÃÏ÷	¾ëk~{#ápTXq(+¬@Â„SêãO¾—I•[T¼c—pDZ—‘pDÚ—pDš—’pÄ
+J8œ át¢Š‹‘ŽÅ1;Äê/H8p.Co¸c	H„ÓsðD£0ŽØž2“X áØSG‹TÂá&ãò?ßWf£Ø	‡£ò™CYù$œòd)Ál>÷Ù‹Ê¨À$rá´.•G }™\8ÍËåÂ6 š‡Ï $œNTW3QÂ‰ÂØ§Üý	Îeè
+wÌ!á )pzžpE±ËÏ,pì©oI›‡—ŒËK8ü|Ÿ Nó£Ø	‡£"©CY‘$œò:™ã©ï•,*~1H”Rh]ªrª@û2…Rš—«‹*l@´*ŸH8¨zj¢„G±W¥dõ$H8—¡7Ü1‡„¤@Âé;xÂh²CL>`„cOÝiR	‡›ŒËK8ü|Ÿ ˜Íbç%Ž8©o¦™Óí(6ÝÓ9òè9Í<&|dµARz‡ 
+ÍCÐ„ÜR+eDt±å7ý£+5¸We\yÅI£Q£Ýå'™§M,iµ‹šã‘™Ñ½®Iz:VXu"Xp³3Ö©­s3–çmOY:+˜±†ÌX
+ÑÒÖ)ÛÄtª :áÂ`‚ò¥{_é)HdUmðêˆ6«¡’"lùçÉ=€'ƒô§³m TŽj½f§ÙÚf—B€áôŽè#Ðp~Gôú²""ˆ8 â€ˆC·"¡Æ%©Øs ;CÌÁ@jU¨ÛŸ³ˆ: êÐ]—
+sq‡&Tâú÷–žÂ‘K0ŠØ(…vÏÆAò»Ýˆ> ×ˆ>˜1¿ÔãŽ@üáRÄñÄ 4‚øƒñ‡(Ýý!«¨<âàgˆ?´L®æƒÑÀcûß?ªÒˆ0gÀœµgÎ"þ€øƒ
+8EüñÓ1Šø(…þÜØñl<c—ïd¹Ýˆ? ×ˆ?˜1¿Ôã<‰–Îñd\Büñ‡;Äºð£(ÌW]8/ÔùÒ!ˆ?€Ÿ!þ`¹šA0bg…%H ‹øâ˜³vÍYÄ°§ˆ? þ`:F ¥ÐBÃpÆ.\Är» ®0c~©Ç<øC68€øâˆ? þÐ¥øC‡“hÂ\¨=ÆBøøâ-“«ÉÀ÷JŠyü<ªJ#ÂœEüsÖž9‹øâ6àñÄLÇ(â Ú!ÄÁ0p»Ýˆ? ×ˆ?˜1¿Ôã#øÃñÄ@ü¡«ñ'šÅù”xç…:ÿUâàgˆ?A®¼`6Ÿ³?.ñó¨*sñÌY{æ,âˆ?Ø€SÄ0£ˆ?€Rè¯ÿ0
+G;„Ær» ®0c~©Ç|øƒøâˆ? þÐÑøCF^I 8Ïð ?CüÁr§¾Çö¿}~U¥aÎ"þ€9kÏœEüñpŠøâ¦cñP
+ýæ³’OxXn7âÀ5âfÌ/ÑøC¸Ø~ùiµÛ³ƒéÙ»Ãiå8Ãx9ÝNœ!O–ähWŽt»€xœ›eƒÃ…Y¶_þ±Ï
+¦f•¸%’Î:_µ™5í&¦’ôzl¨¹‘Àh 2„#&k³Š1Ïûð´x\ÒZ–ðeÈô¯Emh³
+ÚRj
+á0örQ @‚>§UÃ¨_°À0jFY¿øôRÞ°Æ?>¿wu-à(ÃQ¶ÄQöâÉ0`W¬†«W®²,p¬Ý‡Ï}ö{—p–ãØigÙõGñ”îrÏÜå6° ‡¹K	—ÙžTtšN§ÙÓ§Ù6§y>
+<¶Óìd‡N3œf8Í}Ø‰}Çñ·dE€ÓÜ/§yê¹¾ëñƒNswæ6° §¹K	§ÙžTtš]N§ùRËN3œf[œæi£)sÞ¹Ùá„Ó§Nsvb/ò‡»Â±ËÚ‰á4wØiûSÇóƒNswæ6° §¹K	§ÙžTtš=N§9ëÑÂi†Ól…ÓÌSPN3œf8Í}Ù‰ÝØŽØï|y¬Ns‡æQìMÇ3~0Àiî®ÓÜà4wi á4Û3ŠNsI¡ó§™ È9œf8Í
+ÓÌQN3œf8Í}Ù‰ÁhâKV8ÍýršÝáÄ›ü`€ÓÜ]§¹
+,ÀiîÒ@Âi¶g æ’êœ7N3AeN8Ípš›ušyJ—Ài†Ó§¹/;ñtìe+œæ~9Í‘ëÏìXpš»ë4·8Í]H8Íö¤¨Ó|X?½L%)Ûg>_tw¾JÝcÎ¦ß6Îc.ðçÓ^qSÈT_™Nñ’Ô…´Y§N(äÍbLÜ|óe­st1sÒS·^Á	Õ¯¬¤GRŽõv¹"7rZc
+ ‚*ÃZØýôÓïÎ;Ö
+N!ÔÐ/Fö°€Â<‚¥|ÒH5¢U²å„dmxË£Å'YAµÊm67ª,Kx)­aCgßWßáÏ£™3iLí
+¼1´ÀÍÔÅšBiüÚöá?N^åûD$.{|(šþã| 
+¥~½L)/÷üårqò.0ÿ­|müVE‘êÊbEq„²ÀT’Â…=SI
+õ¾r­Sè$"íK(%"ÍC+é™VÆNÌN'µ„oVC-ZbŸZâÌ½ù˜Ñz‰i,ßYÒÂ>>Ü¢bÒæ ™ÈA®OÎZ ˆnÕ$˜ÌçÏ3Ù£›ÌÆAFÜåÄå¤¤¼\™rBQeÊIáÂž)'"­Ë('"íK('"ÍC9é—rO¢0*«gx»	B9råDof*'ã±3wØï
+3k!A9¹œ6U9)ia½9nQ9isPNä ×ÊöÒ@t+'Ñ(˜ìD,†eƒrÆ³ñŒýy(ë‘ œ˜¡œ”Ô,SN(J
+B9)\hœrR(3#
+^ny—QN
+•ÿr­»…Öe”‘ö%”‘æ¡œôL9Å“ˆ>È×År"¬œp/JöP[(']QNFÑxäß·®(ˆåärÚTå¤0¤…}þ|¸Eå¤
+ÌA9‘ƒ\;Z ˆnå$ô#7à©<hr2ÃpÆÿH"Ê	FPRR±L# ¨¬ p¡qˆ,®ˆ(2HûHóÐz¦8Q³…òü»”Ð„5îEÉ +7w¿¬x¯&:àüÐZ4‚Âöùóá5‚60@r­l/m D·F0ŸÏa1›G9Ã²A#â`²¥Ö#áí
+3Þ®(©«Y¦œP”×„rR¸Ð8å¤PZ#GüÜò.•Ñ#_í2×ú¨ÐºTFöe2z4å¤_ÊIÆ~ÌÞ×óµ  œ+'Ü‹’=ÔÊIW”gìÏÆì³”“ËiS•“Âöùóá63z´€9('rk'£G ÑžÑÃÃˆ3Å°lPNf£p±.Ö#A91C9))®Z¦œPÔX…rR¸Ð8åDDWNDtåD¤}	åD¤y('ýRNâ(ö"6WÉ¿‰åDX9á^”ì¡¶PNº¢œþÈ°	=³ ”“ËiS•“Âöùóá•“60åDr­l/m D·r¡°s¡²–
+ÊIÌg3¶rÂz$('m)'?­vû¹äp‰ºD’Mœ
+‰„V"ËjI©ScØD•»:tñ@¦‘;sÙ›=3}×|nžwYx†å¾I¢W| í¾féPóÖ‘¶A0àq*yE&R·‚Þ¨$U…ÏQùNø ýÇ¹¸T%+u~5~ø÷\þRa¡œ…ÓK)«‚–.-ícU9SSSS]FAL5ÓÐ
+ã’”‘¶RÓ0ˆFñÿ‘š%§uµ¢²ä”¢PÈiáBÓ>î9999ÕeäT9â„ž²_`m(6ÓØ	ƒ0à¤fÉi]9Ž,9¥¨ÅrZ¸ä´µ@NEF2Y¢‰@Î(Éiáräô&sÈ)È©’QSäÔ¢pÄ½¡Ø@N£Y<Ùó‘š%§uyà³ä”"	<ÈiáBÓ>&å9Éq4{EOL$§…gÈ‘Ó›ÒC § §JFANu„õãpR’I‡µ¡XANGa\’D€ùHÍ’ÓºT»YrJ‘gä´p!Èióž‚œŠ¹cw0cŽ$óËgÉiáªó€œ‚œ*9ÕANThäÞPl §á,Šb—ÿ‘š%§uÙ³ä”"•!ÈiáBÓ>¦–9I×›„3v<™ÐØDrZx†9½I+r
+rªdäTGòÉ0òJJ±6ÈiòHÓ’‚tÌGj€œþ}»z¬!¥‡KÔ¹¨.š¿‹²&šîÜÎ'"írý¼—ÌÑÑ 3–¡;ü/þã|lŠLˆÔ,R<™Ÿõ]hZÒ^îž*ŒUYO(@ÀË5kpOéNº:¤ÿ8g	E~RÝDQÛ©ÐDÎ¤Né¥”IÀ‚7ö…7J'Ð°9“ù<bgÑw4¸­e®?Š§<3
+ü±•¾ÒÍ gã ù³/ÙÀ!5>‹¬Ë¾”e‘Ù—À"‚Eö…EJgº°EF£`Œ¹,ÒN´–EN=×wÙŒ›™­«Ï,²¾ÒÍ"Ãx6ž±¿eÍX¤ÆG"`‘ui’²,’"MXdáB°È¾°Hé”¶³ÈÐÜ€ýb+ëÁÁ"
+éDkYäØŸ:.O_E¶ÒWºYä<Ãÿ\±Ej|$Y—Ï(Ë")òE.‹ì
+‹”Ía;‹œÏçƒ’W¿YiH'ZË"G±7³S0“³ö™E¶ÑWºYdÃ’ÏgXsÅ©ñ‘Xd]â¡,‹¤H<Y¸,²/,R:Éƒí,2ðÃ°$›ëÁÁ"
+éDkY¤;œxSö»#Ì\ }f‘mô•ö÷"Gá(b—x`ÍX¤ÆG"`‘u‚²,’"CXdáB°È¾°Hél¶³È8½€ýêëÁÁ"
+éDkYdäús‘t§}f‘mô•nóÙŒM¹XsÅ©ñ‘2,òò“üÿ PK    Ö½:]£?F_¿  ç	     word/settings.xmlµVÝrÚ8¾ß§`¸áf	¶qLã)é$°ÞM&l3uú ²} mô7’¡Oß#ÛŠÉ–f˜íìòùÎ¿¾sÄÇO/œ
+v 
+•b>
+/‚Ñ D)+*6óÑ×§lüa40–ˆŠ0)`>:€}ºþíã>5`-j™z&åå|¸µV¥“‰)·À‰¹
+‚k©9±ø©7Nôs­Æ¥äŠXZPFíaA2ìÜÈù°Ö"í\Œ9-µ4rmI*×kZB÷ã-ô9q[“¥,kÂ6'æ …ÙRe¼7þ_½!¸õNvï±ãÌëíÃàŒr÷RW¯ç¤ç”–%ƒÄ™OŠ>püƒ£×Ø»+±q…æaÐœúÌ
+;'‘z …&úpœ/Ó»šæCÌfxŒú&%ìÓAç›Q;œ8 ‹‘ëÜŒ9zKíÓ&™å%MkR3ûDŠÜJåÝÎ¢ …Ë-Ñ¤´ sEJô¶ÂjÉ¼^%ÿ–v,ÕØÄÖÂ<jØQØ?ÒÒÖZG
+•Ý©6ýñ@²¶GHÞŽ	:„c±o¨¿’¸jMÏ¿¡OÛöN ‰S­iO®É¹=0È°Æœ~ƒQÝ×ÆRôØÀ/dð^ \äÏH‹§ƒ‚ˆë™ùŸ‚5–1ªVTk©ïD…“ù«Á&Ç×‹+²2þðEJëUƒà6žÍ¦±Ú#Á4NÂä$’Étq
+	/ƒY|{
+‰®’éÕò2’ìêd77áòÃI›Ÿg½¸
+’$>…d‹äjšu½é:ÂS·ûµ?9š
+xk± ¼Ð”Vn;NœF¡Ÿo©ðx¸/àÉëÂƒãqNËp\=´òŠµ„usf+¢7½ßNCŸ”âj¸õU"O@ÿ©e­Zt¯‰jéãUÂ8î,©°”{¹©‹Ü[	ÜpGP-ªÏ;Ýô©oÏ>µH¿fHÃÝFÄøkîˆÄØCÉ|øß?vtg:w¬…Qªe|±	çCF7[:3‹_¾«ÍG±‰:,j°¨ÅšRºbQ»;ô²ÈËŽô¦^6íe±—Å½ìÒË.{Yâe‰“mqü5®ìgœCtòµdLî¡ú«ÇuËÜM÷Mm¥_ÉÝ6ífÞËvß#e+è 3Ø¥ðb±Í>'£hÅÉ^jÍœóN›5{û®Ãœ²zë¡"–øýðÆ¸™‰åâÞ¡’"ó/úçå¢-‹Qƒ‹LáKd¥öØï
+ÆXty‡£‡§FÅAIø
+·Aî8ÙÀRÑ^qÝ€ú¿h×ßPK    Ö½:]èZåS   ¶     word/webSettings.xmlÐÁjÃ0 Ð{¾Âä’SãdŒ1B’2»”A¶p%1µ-c¹Íú÷3Y6»ô&!é!©ÞÍ.àI¡m²2/2Vâ ìÔdï‡ÝcÆ(;šì
+”íÛ¤^ªúBˆÄ"b©2²Iç\Å9ÉŒ ØXÑbê'n„?ÝN¢q"¨^i®ü®(Òñ·(8ŽJÂ3Ê³ÖyîAG-ÍÊÑ¶Ü¢-èçQQ¼ÇèoÏe™òþd”ôH8†<³m´Rq¼,ÖÈè”Y½N½è54i„Ò6a,~PhËÛñ…où€G¸Àuq
+
+¥!kþçÛmòPK    Ö½:]û9 sc  û
+     word/fontTable.xmlÝ–ÁnÚ0Æï}Š(—œJl“µ*Æ†´Ë{ °Û‘í@¹ÒûÎ;l0í°I»ômzí+Ì$‚tCH!9ÿÏùbÿôýZ·w,²&D**¸ïÀp,Â1¤|ä;ú½Ë†c)ùG‚ß™åÜ¶/ZÓf(¸V–¹«&|{¬uÜt]Œ	Ãª&bÂ
+É°6—rä2,?&ñe XŒ5Ðˆê™‹ ¸²syˆ‹CW"Há:½ß•$2Ž‚«1ÕÊmzˆÛTÈa,E@”2[fQæÇ0åkèí1H¡D¨kf3ùŠR+s;éˆE¶Å‚æ›"âÛÆÈn_XVÎÎš69f¦þ~Æ"J¥TŒ1Š@£OpäÛ äc»ëÙÁKEôz6*h!f4š­$œhQcªƒñJ›`I—«,èŠŽŒš¨Ø¬ÁÎ*Ð·ávíÌ©oW‚Ô§±]…9éƒ[nÆ¦SŸ2¢¬·dj½óý¼ù^:x<óCfäUð§àõÚìuz½
+¯®©\7<¸Ãë¦ŠWz	3Ÿcyu1˜EVqZòÉ8-y¡óp¨ÈÉ[V¼uåÀ\eœnžÅééáÛÓÃëñó§Ç/_ÿQ6öÓ’ix7*º/ÒŸÅdÃÞ‘aucÂ
+@Ð ×e	ÿ=·1»8¢&iUAë¥ˆÒÈ'h°,hnIÐhÈ¿
+Úbþs1ÿµ¸¿_Ì¿Ÿ>nL‰üÏò&I‰¬Ê0y;Ýiò–?¶^àT`päÁ–ó>–SÇ¬°âo/Í±ïå}‰Îuü—¾&ë§zM®Fª}ñPK    Ö½:]”A"¸Æ  »*     word/theme/theme1.xmlíZMoÛ6¾÷WºäÔúÛuŠºEìØíÖ¦
+·C´D[l(Q é$¾
+íqÀ€aÝ°Ã
+ì¶Ã°­@ìÒýšn¶è_)ÙŠ(QræÅMÚ%Ç"ù<|¿_RðÕë‡ûˆqLýöZåRy
+ ß¦öÇíµ{ƒþÅÖàú$ÔGíµ)âk×¯]¸
+¯yH¸Ï¯À¶å
+\)•¸-‡!¿DäË¹eò‘Kƒ’Ö#¥j¹Ü,yûð¡‡ÚÖÝÑÛ¥uí sþ‘¾àj,µ	ÛµÃ“H+šW8{•ùSøÌ§¼KØ‡¤mÉýz0@‡Âr!'ÚV9ü³J1GI#‘D,¢LÐõÃ?.AJXÕéØxóUúõõË›iiªš4ð^¯×íUÒ»'áÐ¶¥E+ùõ~«ÒIIÅ4’tËrÝH“•¦–O³Þétë&šZ†¦žOÓ*7ëUM=CÓ(°Mg£Ûmšhšf>Mÿòz³n¤i&h\‚ý½|µé@Ó 0¢äf1KK²´RÑ¯£ÔHœvq"Ž¨/d¢RÖ—ë´Ý	Øb ´%®	2|$A¸
+ÁÄ’ÔœÍóç”X€Û¢m}@YbŽÖ¾}ùãÛ—ÏÁ«G/^=úåÕãÇ¯ý\¿	ýqþæû/þ~ú)øëùwož|µ È“Àßúì·_¿\€IÄë¯ŸýñâÙëo>ÿó‡'E¸
+‡IÜ {ˆƒ;è ìPO*_´%²%¡â$tÃsèC.‚õ„«ÁîL!E€ÒpŸÉb[ˆ¸1y¨)µë²‰HÇ–†¸åzb‹RÒ¡¬Ø ·”IÛMüñ¹Ø$	Øp¿P¬n*„z“@æ.Ü¤ë"M•m"£
+Ž‘Pst¡"üŒ5ÿla›QNG<À q±!x(Ìè›Ø“ŽžÊ.CJ³èÖ}Ð¡¤pÃM´¯CdºBR¸	"šnÀ‰€^±VÐ#IÈm(ÜBEv§ÌÖÇ…¦1"ôÄy!ø.›j*Ý’µqAdm‘©§C˜À{…ÛÒ$d“îu]èÅzaßM‚>â{2S Ø¦¢X>ªç°z–Ž…þâˆº‘X²BÝÃc×ŒjfÂ
+sQ½†LÉ¢Ävª!fz›êwØ?V¿ód»KÛl•ýN¶‘×ß>ýÀ:Ý†´aa²§ûÛB@º«u)sð‡ÑÔ6áÄßF2Ï{ÚyO;ïig¨§-¬J«ïdz×Šîó»ÝÑuÏ[tÛaBvÅ” Û\o€\šÆéËÙ£Ñh<ä‹/¢+¿jÚ”ŒX‰3FÅ'X¸».¤L+µÃ˜k²Ä£  \ÞŸ-}*_¨ôºèý––5ô÷G:[Ô‰ÖÕÊæ…¡¢ó}Sâ–”¼¹*ÔÔÖ'¥Fíòi©Q‰OHJã˜zäøí_é¤ÂLúä™O–H)M³i'³ä¨0Mù<œÏrŒWrœºÐAÇY—°~¥v¶£¨0©—Ð÷´¢­¼(ÚÂ‚o¨ÝŠÖ7tâƒƒ¶µÞ¨6,`Ã mäG~õ¹W­’±ß¶lÁÒÑjìÇ÷‘nûus¢§­lZ–köœ®ÒŒ‹MÈÝˆ8\•¶.ñ
+¦ª6êÊ%«µUiÕZÔZ•÷U‹èÉáh4B¶0Fyb*µu4c*»t"Ûu0$¶¥uêQ::˜ËYuþÀd©Ï2U/ðæ–~ïo¨sáBHÎ
+N+¿ÞDtÙŒˆåO{Á òÑpÊF«²]íÚ.§²œÛîôm7«ÈG5'c[^Nª8´-Ê„Ke»\l÷™¼Ó˜T”V ²˜) Býð?Cû©Æ9—'âÏlKäULìà1`X6aá2„¶ÅÌÞÿn×JÕx Øl“L…ÌÚBY(0˜gˆö¨bÞTn²€;oNÙº«ás65¬×Öá¸ÿ¿½Ößå©PS¡~’‡àzÑU*q[?-mOâÌŸP¤zL·UEî¿æ(\ >äy
+3› +£¾:¯èŽÌ;_U€¬&[³Ò¥ZY­ÔÞj‹÷ï"jPÆè¢³ù–"k9÷ßl¬„"+ˆµ†!Ôù}¼HSc¦~^N½ÄËH5ùe˜:
+J	7ÑNHâçb<C‰žÄƒmVJ<©3ÕGzYrŒgiÄßA#€CC"¤¢aöÓ©ìådçH²ØÐ1km9Ö‡á@3W—cŽYt™å©*fß$/`'™#Žd($Eb/†¶_¹O—´ÑŸ–WæÓ%cð„|*—ðiìÅðüŸÉ^¥ã¡`°;ÿá™,	r8ý¯]øPK    Ö½:]ž€:×§        customXml/item1.xml­Œ±
+Â0 ÷~EÉ’É¦:ˆÓR'¡
+®IúÚ’¼’¤bÿÞˆ¿àxwpÇæmMþ4:N·EIsp
+{íFN÷óæ@ó…ë…Aœ®hSgGYu¸x!O*ÉÉã\1ÔV„gp©
+è­ˆ	ýÈp´‚ªÅ‚‹lW–{&µ4G/æi%¿ÙVPú.®8aí­-žÝ%…¯¸
+›dr„ÕÙPK    Ö½:]>ÊåÕ½   '     customXml/_rels/item1.xml.relsÏ±jÃ0à½O!´hªeg(¡XöÙBp!«Ï¶ˆ¥ºKHÞ¾¢S2Þÿ÷sm«¸A&Ñ¨¦ª•€èpôq6êgØn• ¶q´+F0ê¤úî£=Áj¹dhñ‰DA"¹0§o­É-,U˜ –Ë„9X.cžu²îbgÐ›ºþÒù¿!»'SF#óal¤	Þ±qš¼ƒºk€È/*´»c8‡õ˜±4ŠÁæØHÏþVMUL©»V?ý×ýPK    Ö½:]µ»LMá   b     customXml/itemProps1.xml±nƒ0Ew¾ÂòâÉ1 hˆH )kÕJ]x€%l#ÛDªþ{M:5cÇw®tîÕ;?å„n`¬Ð*'Ñ&$T«;¡†œ¼¿54#È:®:>i9¹ƒ%Ç"8tvßqÇ­Ó.$òå™ÍñèÜ¼gÌ¶#Hn7zåÃ^É?ÍÀtß‹*Ý.”cq&¬]¼K~È	#ï^y©rüU7qšeQBësÒÐ2ÙîèK˜V4mâ]YŸOQµ-¿q ´Núí|…Þ®ä‰­ÞÅˆÿ¼Šë$ô`ø<Þ1{4²§Êøó–"øPK    Ö½:]Ð‡‰k  ‰     word/numbering.xmlÍXÝnâ8½ß§@‘F\µ‰“44´¢@V]F#µó &°êŸÈ10ÜîKícÍ+¬?¨Š3LvËß9þ|Nüøüðƒ’Þ‰s6îƒ[§ßC,æKÌÖãþ÷—è&ì÷R	ÙÎÐ¸@iÿáþÏûÛÒ*¯§(X:Ú'ñØÚH™Œl;7ˆÂô–âXð”¯ämÌ©ÍW+#{ÏÅÒvàdW‰à1JSÅ3…lS« £ü26
+ãòÒuœPÝcVq¼¯ˆ'ˆ©àŠ
+¥ºk…¯ÛäFq&Pâ&X4WPÑìÆÖV°QÁqSÕ¡1#UÀhGI™ÌëróB‹¡DˆKŠÌ!3o)b2+Ïˆ¨‚9K789êÖ”M7%Ií†O6»O€ßÎô™€{5	/)™ƒ(É+¯gÎŽhŠ
+qI	o×,+9}øöÍ¤9wÝNÛ?ß&G6ÜŽí‰½V\ªüWáÑéÖÒvÅ<o`¢GOkÆ\U‘R¼§ŸHë^µ'¸H¥€±üº¥½7wOË±åd),ÅKÛA2¶¢ì3˜Z¶ŽÐ-‘øÚ!òrHP™£&(›ÎÓ$MHœzÀ™O}7`5”‹©&*d™ò,ÕB#ZM.QŒ)$ÁúQÅ>Ûjþ¯¸œ%h%óéä›È
+Rû,Æ2G­a©ë„+ÅAè8:ß>fb¦%ÐDEXÝm [ëþoyA™žñÛÙòÙx¢ç/Å&±gÅžûN8t\ÿC‹íûµbëp÷b»&±çÅŽ½IGb'Ïò@ª•¿àT—®¾Ix×ôÂ	k½Ðáî½ðL^D½ðBßÁ]W]Æä…{E/n:Ú½¾Á‰4vÀdêMZ´ Å–$Ï*ýóïþÿ´‰bˆ8“©V5±úñ| N2èDiúf3©Ÿ±TŠd¢…qw&ãÜæíÌ›O¢Ù|ÚqïOÐc=ßÍ:òµ]7û¾&_½æ­qæQ4ëè@š|=ß»ñµUgü®L®†]9“À}ÌûØ_xW|ß}:çªŽvÿ¾MFáP^\÷x]ñtµòá?:],3“þnzãl¹¯° cg`®ÔÀ<3ì®öîÇöæ×ÀîÌ°A
+,0Ã¼ØÀsk`¡j`C3Ì9…Ù'ÿ¡ÞÿPK    Ö½:]ì».0¼  x     word/footer1.xml¥”ÍNë0…÷<…•MVmÒ+„PDÊÄ;$@¬]ÇI|k{¬±›ÐÏÂ£ñ$LÒ¦A qÝøÿ|>c}qùl4k$z6ó4fÒ
+(”­òøñáfv3¸-¸+óx+}|¹<¹h³2 #±õ™É£:—%‰µ4ÜÏÁIKs% áºX%P–JÈk#mHþ¤éYB“u4@ÄŠá¸Þ¸™ ãxP+¥UØö¬¾`ŒÊ0'ÙÞÄÐ$ù9õ•=0š<Ú Íö€ÙÐí›‘2kŒÃwkw;ì«A¿=.”š‚ëkåü@ûÖëŸí"à´,FÅé´³ìDäp‘ö­[N	´“8!½§œ3zÈŒñ:ZÊ»Ÿø ù'îw‘Œ¶®‘·TÀ)‘;ÑÒˆ_ÓÿG¯¸m¸qÕq¸¿7ÒÔq´[»Yþ8Ö}Í=%#²ÛÊò•¦ì TeÝ-GKú˜\_Üa_Ý‡­–¬Í®óè HŒ’næŸF=°ÝhrÐõEX>®iOFWYööòÊ®À–
+
+ÊJôŒ>FVýŸ–[!ÙJRHÆpÝCí€¡ÇâÞ—ôq.ßPK    Ö½:]¢ÈÖg½  „      docProps/thumbnail.jpegíVkpU>»{7)mÍ(-Â»2À¤-B+6iÚ¦”6¤-¯q†I“Mš&awÓ–N‘ú õ‡<|ÿ±TtœqPÑ‚:RE@GÆ"jñ5<_ñÜÝ¤	P„‘_ÎìÝÙý¾œóÝsÏ9{çn¢Ç¢_ÃÐò{	0exAô´¾Ënµ®p8«Jì6t è·¹Âá khÊ¢³ÔbZºl¹Iß,Œ‚4È†4—[
+9€ƒjáºqé0OÜÿ¯#Í#Hn &yÈ#¹‘· ðwX”tgÐ^Ð,‡‘ëïDž!b‚ÈÍ”×«¼˜ò:•/U45N+rš‹Áísy·!ŸV—d¯OâjÊÈ(‚‚èw›h/bÈëIéÞÄ}‹£1‰¯7ït©¡zb­Ý'–9c¼Ãí²U#Ÿˆ|X¶Pûdä?Ej‹O`‡yÅ’ZUÏÞÛê«Y‚<¹Ç/ÛkböÖ`]e•:—íl-pÆ4ûÝ’{ã‘Ÿò	ö
+5<B±öù_¤,Ÿ+—šªmñ8­>k¥‡WºÊÈ³‘¯CÎ*5g®S”:ÕøÜÞ°ìˆåÀõ•jLb$¥FÅ.ûjÊÔ¹d–Œ/QK–{ý%ö˜¾-Pö"æF¶ŠgmLsÐ%ÚJÕ8ä‚¬ÅäGz\Å´·3ÏƒÅŒA>Ý„Ë`'”‚1"z¼à‡ Zô
+hñ3w@Ú×9ÊŠzev?«®QW8Ó„H1“|¼ç
+2—B0‘ùä>2£µÌ˜ëHZŸ®uv Î*ˆ`Tª[–õÙ‘œÄzíâ
+¿ûÀ“ç®šº.g!žOr@ÂÄ•Ó“ëß×öþÈDŒÒuÿáô}mPu³þògø~¾Ÿ½üÉ„‚?ÁŸÄ«Š0·€’Q#Þ~%))ƒäºñ–Á…Ï>Ô…’tW­è
+®ÏNxh'„µ•—*¡}ZÂj>jþÙÜcÞlÞjþñš.Ú%n·ƒû€ÛÉíâ>·›ëæ>äöropï%½«ïw¯Ô¯–zëµ ƒÅ0Ú0ÁPlk˜d¨HÄ3dr
+e†)è=ðÞ’×K®ÅËðïêàk©ºZôú¡Y©@R:„Õ×ìÿØl2†äû5»¶€îå¸BgÓëŠÀ¤›ª+ÔåêÊ)ç§›‚¾B|Ú®ÚuîT $©’ëœ®ì:ºWéì&Å' -2=h­¡ðjÑ_ï“MyfólS~ª“=èž1Íä
+LŠK2‰‚$ˆM‚gÐï zD_t*ß7&ó@Â&/˜ûžY¶å€×%€¬™	[ž‰#^èšåŽˆM±3Ÿa¾ ¼ùyê¯tžM§¢Ñ‹x^é7\ÞþÝ^Þ‚ñOìDû@¶µø½ ÒSR€0ÙÀÓÙxÏcFð&pÊY€µ~ 1{elí²ØoÙ6®`žèàâœU¤Ñ`¥ÿnkÐ ·ƒ‰îc
+‹)rŒX#Ã™è‹¹òª þaeXŽð:}ÊÔ4ì
+,Ãq,áxž`iÌèbä‡Ë-Ò
+_äÒ_•‘·fÃæ”	–íÝ#œ‡ÎMÌ¯Û‡¤ff•=iò”œ»¦Î¼{Öì‚Â{¬Å¶’Ò2{yuMíâ%øzÝÁ[ïó¯”äHSsËêÖ‡~äÑµë{|ã¦§ž~æÙçž¡sËÖ—^~eÛ«¯½ùÖÛ;Þy·kç®>ÞóÉÞ}û?ýìËÃ_õ9z¬÷xßéoÎ|ûÝ÷ýg8áâ¯¿]úý?ÿ¢u1À
+”>h]Ø†%„#zZÃ6S‘ðãruÃŠé]«†Ï[“’aÙ°y{÷	ùÎs#êÄC©™göM:OKS*»µÂÚÿSe…%ê:én8#g„ùpåJt°¦‚h h h h h ÿ3ˆöÂ?PK    Ö½:]3Á8Ÿ  J             €    [Content_Types].xmlPK    Ö½:]y&K@ø   Þ             €Ð  _rels/.relsPK    Ö½:]ˆ†Si  Ñ             €ñ  docProps/core.xmlPK    Ö½:]ôÛÛë  l             €‰  docProps/app.xmlPK    Ö½:]uÐß÷"  P            €¢  word/document.xmlPK    Ö½:]!	JT@  K             €È)  word/_rels/document.xml.relsPK    Ö½:]ŠbOÐ½/  ¶U            €B+  word/styles.xmlPK    Ö½:]`y‚Ó95  s¯            €,[  word/stylesWithEffects.xmlPK    Ö½:]£?F_¿  ç	             €  word/settings.xmlPK    Ö½:]èZåS   ¶             €‹”  word/webSettings.xmlPK    Ö½:]û9 sc  û
+             €½•  word/fontTable.xmlPK    Ö½:]”A"¸Æ  »*             €P˜  word/theme/theme1.xmlPK    Ö½:]ž€:×§                €IŸ  customXml/item1.xmlPK    Ö½:]>ÊåÕ½   '             €!   customXml/_rels/item1.xml.relsPK    Ö½:]µ»LMá   b             €¡  customXml/itemProps1.xmlPK    Ö½:]Ð‡‰k  ‰             €1¢  word/numbering.xmlPK    Ö½:]ì».0¼  x             €Ì¥  word/footer1.xmlPK    Ö½:]¢ÈÖg½  „              €¶§  docProps/thumbnail.jpegPK      Ÿ  ¨­    
